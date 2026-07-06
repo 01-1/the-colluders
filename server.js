@@ -1,7 +1,7 @@
 import { createServer } from "node:http";
 import { readFile, mkdir, writeFile } from "node:fs/promises";
 import { extname, join, normalize } from "node:path";
-import { createModelClient, parseEnv } from "./src/model-adapter.js";
+import { configFromEnv, createModelClient, parseEnv } from "./src/model-adapter.js";
 import { modeCatalog } from "./src/game-core.js";
 import { applyAction, authorizeModelStep, claimInvite, createRoom, dumpRooms, inviteLinks, loadRooms, runModelStep, sanitizeRoom, tokenPlayerId } from "./src/server-game.js";
 
@@ -20,16 +20,24 @@ const types = {
 };
 
 const rooms = await readRooms();
-const modelClient = createModelClient({ apiKey: await readOpenRouterKey() });
+const openRouterEnv = await readOpenRouterEnv();
+const modelClient = createModelClient({
+  apiKey: openRouterEnv.OPENROUTER_API_KEY,
+  config: configFromEnv(openRouterEnv)
+});
 
-async function readOpenRouterKey() {
-  if (process.env.OPENROUTER_API_KEY) return process.env.OPENROUTER_API_KEY;
+async function readOpenRouterEnv() {
+  let fileEnv = {};
   try {
-    const env = parseEnv(await readFile(localEnvFile, "utf8"));
-    return env.OPENROUTER_API_KEY || "";
+    fileEnv = parseEnv(await readFile(localEnvFile, "utf8"));
   } catch {
-    return "";
+    fileEnv = {};
   }
+  return {
+    ...fileEnv,
+    OPENROUTER_API_KEY: process.env.OPENROUTER_API_KEY || fileEnv.OPENROUTER_API_KEY || "",
+    OPENROUTER_MODELS: process.env.OPENROUTER_MODELS || fileEnv.OPENROUTER_MODELS || ""
+  };
 }
 
 async function readRooms() {

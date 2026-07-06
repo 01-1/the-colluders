@@ -12,6 +12,21 @@ export function parseEnv(text) {
   return env;
 }
 
+export function configFromEnv(env = {}, baseConfig = openRouterConfig) {
+  const modelList = String(env.OPENROUTER_MODELS || "").split(",").map((model) => model.trim()).filter(Boolean);
+  if (modelList.length < 2 || modelList.some((model) => !model.endsWith(":free"))) {
+    return baseConfig;
+  }
+
+  return {
+    ...baseConfig,
+    freeModels: {
+      colluder: modelList[0],
+      monitor: modelList[1]
+    }
+  };
+}
+
 export function createModelClient({ apiKey, fetchFn = fetch, config = openRouterConfig } = {}) {
   const available = Boolean(apiKey);
 

@@ -1,6 +1,6 @@
 import { readFile } from "node:fs/promises";
 import assert from "node:assert/strict";
-import { createModelClient } from "../src/model-adapter.js";
+import { configFromEnv, createModelClient } from "../src/model-adapter.js";
 import { authorizeModelStep, createRoom, applyAction, sanitizeRoom } from "../src/server-game.js";
 
 const files = [
@@ -102,5 +102,11 @@ const timeoutClient = createModelClient({
 });
 const timeoutResult = await timeoutClient.complete({ role: "monitor", prompt: "test", timeoutMs: 5 });
 assert.equal(timeoutResult.timeout, true, "adapter should report timeouts without exposing secrets");
+
+const overriddenConfig = configFromEnv({ OPENROUTER_MODELS: "cohere/north-mini-code:free,nvidia/nemotron-3-ultra-550b-a55b:free" });
+assert.equal(overriddenConfig.freeModels.colluder, "cohere/north-mini-code:free");
+assert.equal(overriddenConfig.freeModels.monitor, "nvidia/nemotron-3-ultra-550b-a55b:free");
+const rejectedConfig = configFromEnv({ OPENROUTER_MODELS: "paid/provider-model,cohere/north-mini-code:free" });
+assert.equal(rejectedConfig.freeModels.colluder, "cohere/north-mini-code:free", "non-free env model values should be ignored");
 
 console.log("Smoke test passed: multiplayer rooms, privacy, scoring, and model fallback behavior are covered.");
