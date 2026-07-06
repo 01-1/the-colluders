@@ -1,0 +1,12 @@
+{
+  "name": "the-colluders",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Hot-seat steganographic coordination game with monitored task messages.",
+  "type": "module",
+  "scripts": {
+    "start": "node server.js",
+    "test": "node scripts/smoke-test.mjs",
+    "test:live": "node scripts/live-room-check.mjs"
+  }
+}
