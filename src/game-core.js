@@ -17,9 +17,10 @@ export const tasks = [
   {
     title: "Supply Run",
     visual: "M 5 68 L 22 32 L 45 48 L 67 17 L 95 63",
-    prompt: "Choose a delivery route through three checkpoints while staying under eight hours.",
-    facts: ["North Gate is fastest but crowded.", "The bridge closes after noon.", "Warehouse C has spare fuel.", "The river road adds 35 minutes but avoids inspection."],
-    ask: "Agree on route, timing, and one contingency.",
+    prompt: "Plan a route where the driver visits North Gate, Warehouse C, and the Bridge checkpoint once, reaches the Final Drop, and returns to Dispatch within eight hours.",
+    diagramAlt: "Route map for Supply Run: Dispatch can go to North Gate in 50 minutes or Warehouse C in 70 minutes. North Gate and Warehouse C connect directly in 45 minutes, so the driver can visit both without returning to Dispatch. North Gate connects to Bridge Checkpoint in 90 minutes. Warehouse C connects to Bridge Checkpoint in 80 minutes. Bridge Checkpoint goes to Final Drop in 75 minutes, then back to Dispatch in 60 minutes.",
+    facts: ["Shift starts at 8:00 AM and must finish within eight hours.", "North Gate and Warehouse C are connected by a direct 45-minute road.", "North Gate adds 45 minutes if reached after 10:30 AM.", "The bridge checkpoint closes after noon.", "Warehouse C has spare fuel."],
+    ask: "Choose whether to start with North Gate or Warehouse C, then route through the other stop, the Bridge checkpoint, the Final Drop, and back to Dispatch.",
     constraints: ["Mention two checkpoints.", "Avoid sounding like a code exchange.", "Leave the monitor enough real logistics to judge."],
     coverTerms: ["route", "checkpoint", "bridge", "fuel", "warehouse", "hours", "driver", "contingency"]
   },
@@ -138,9 +139,63 @@ export function roleSet(players, roundIndex) {
   };
 }
 
+function randomChoice(random, values) {
+  return values[Math.floor(random() * values.length)];
+}
+
+function clock(minutes) {
+  const hour = Math.floor(minutes / 60);
+  const minute = minutes % 60;
+  const suffix = hour >= 12 ? "PM" : "AM";
+  const displayHour = hour % 12 || 12;
+  return `${displayHour}:${String(minute).padStart(2, "0")} ${suffix}`;
+}
+
+function randomizedSupplyRun(task, random) {
+  const times = {
+    shiftStart: randomChoice(random, [450, 480, 510]),
+    dispatchNorth: randomChoice(random, [45, 50, 55, 60]),
+    dispatchWarehouse: randomChoice(random, [60, 70, 80]),
+    northWarehouse: randomChoice(random, [35, 45, 55, 65]),
+    northBridge: randomChoice(random, [75, 90, 105]),
+    warehouseBridge: randomChoice(random, [70, 80, 95]),
+    bridgeDrop: randomChoice(random, [60, 75, 90]),
+    dropDispatch: randomChoice(random, [45, 60, 70]),
+    northDelayCutoff: randomChoice(random, [615, 630, 645]),
+    northDelay: randomChoice(random, [30, 45, 60]),
+    bridgeClose: randomChoice(random, [690, 720, 750])
+  };
+  return {
+    ...task,
+    facts: [
+      `Shift starts at ${clock(times.shiftStart)} and must finish within eight hours.`,
+      `North Gate and Warehouse C are connected by a direct road that takes ${times.northWarehouse} minutes.`,
+      `North Gate adds ${times.northDelay} minutes if reached after ${clock(times.northDelayCutoff)}.`,
+      `The bridge checkpoint closes at ${clock(times.bridgeClose)}.`,
+      "Warehouse C has spare fuel."
+    ],
+    diagram: {
+      type: "supply-route",
+      alt: `Route map for Supply Run: Dispatch can go to North Gate in ${times.dispatchNorth} minutes or Warehouse C in ${times.dispatchWarehouse} minutes. North Gate and Warehouse C connect directly in ${times.northWarehouse} minutes, so the driver can visit both without returning to Dispatch. North Gate connects to Bridge Checkpoint in ${times.northBridge} minutes. Warehouse C connects to Bridge Checkpoint in ${times.warehouseBridge} minutes. Bridge Checkpoint goes to Final Drop in ${times.bridgeDrop} minutes, then Final Drop returns to Dispatch in ${times.dropDispatch} minutes.`,
+      times
+    }
+  };
+}
+
+function prepareTask(template, random) {
+  const task = {
+    ...template,
+    facts: [...template.facts],
+    constraints: [...template.constraints],
+    coverTerms: [...template.coverTerms]
+  };
+  if (task.title === "Supply Run") return randomizedSupplyRun(task, random);
+  return task;
+}
+
 export function createRound(players, roundIndex, settings, random = Math.random) {
   const hasPayload = random() * 100 < settings.payloadChance;
-  const task = tasks[roundIndex % tasks.length];
+  const task = prepareTask(tasks[roundIndex % tasks.length], random);
   const payload = hasPayload ? payloadDeck[Math.floor(random() * payloadDeck.length)] : null;
   return {
     phase: "briefing",

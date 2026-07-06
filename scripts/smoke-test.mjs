@@ -1,6 +1,7 @@
 import { readFile } from "node:fs/promises";
 import assert from "node:assert/strict";
 import { configFromEnv, createModelClient } from "../src/model-adapter.js";
+import { createRound } from "../src/game-core.js";
 import { authorizeModelStep, createRoom, applyAction, sanitizeRoom } from "../src/server-game.js";
 
 const files = [
@@ -26,7 +27,13 @@ for (const phrase of [
   "Create multiplayer room",
   "How it plays",
   "Show round instructions",
-  "Copy join links",
+  "Hide round instructions",
+  "Your job as Colluder A",
+  "Your job as Colluder B",
+  "Your job as Monitor",
+  "route-diagram",
+  "aria-label",
+  "Copy reconnect link",
   "Model mode is offline",
   "Generate LLM colluder exchange",
   "Spectator bet"
@@ -49,6 +56,7 @@ assert.throws(() => applyAction(isolatedB, isolatedA.tokens.p1, { type: "startEx
 const privacyRoom = createRoom({ payloadChance: 100 });
 const monitorView = sanitizeRoom(privacyRoom, privacyRoom.tokens.p0);
 const colluderView = sanitizeRoom(privacyRoom, privacyRoom.tokens.p1);
+const receiverView = sanitizeRoom(privacyRoom, privacyRoom.tokens.p2);
 assert.equal(monitorView.you.role, "monitor");
 assert.equal(monitorView.current.hasPayload, null, "monitor must not see payload truth before result");
 assert.equal(monitorView.current.payload, null, "monitor must not see payload value before result");
@@ -56,12 +64,34 @@ assert.deepEqual(Object.keys(monitorView.links), ["self"], "sanitized state must
 assert.equal(monitorView.links.self.includes(privacyRoom.tokens.p1), false, "monitor state must not expose a colluder token");
 assert.equal(colluderView.current.hasPayload, true, "colluder should see payload truth");
 assert.ok(colluderView.current.payload.value, "colluder should see payload value");
+assert.equal(receiverView.you.role, "c2");
+assert.equal(receiverView.current.hasPayload, null, "Colluder B must not see payload truth before scoring");
+assert.equal(receiverView.current.payload, null, "Colluder B must not see payload value before scoring");
+assert.equal(app.includes("${escapeHtml(round.payload.type)}. ${escapeHtml(round.payload.hint)} Strategy"), false, "private payload copy should not expose raw metadata fragments");
+assert.equal(app.includes("task.constraints.map"), false, "shared round instructions should not render colluder-directed constraint chips");
+assert.ok(app.includes("function coverTaskCard"), "cover task should render as a separate section");
+assert.ok(app.includes("${coverTaskCard(room)}"), "cover task should stay outside the hideable instructions toggle");
+
+const samplePlayers = [
+  { id: "p0", name: "Ari", kind: "human" },
+  { id: "p1", name: "Blair", kind: "human" },
+  { id: "p2", name: "Casey", kind: "human" }
+];
+const lowRandomSupply = createRound(samplePlayers, 0, { payloadChance: 0 }, () => 0.01);
+const highRandomSupply = createRound(samplePlayers, 0, { payloadChance: 0 }, () => 0.99);
+assert.equal(lowRandomSupply.task.diagram.type, "supply-route", "Supply Run should include a route diagram");
+assert.ok(lowRandomSupply.task.diagram.alt.includes("Dispatch can go to North Gate"), "route diagram needs accessible alt text");
+assert.ok(lowRandomSupply.task.diagram.alt.includes("North Gate and Warehouse C connect directly"), "route diagram should explain the direct connector between required stops");
+assert.equal(JSON.stringify(lowRandomSupply.task).includes("River Road"), false, "Supply Run should not include irrelevant River Road text");
+assert.equal(app.includes("River Road"), false, "Supply Run diagram UI should not render irrelevant River Road labels");
+assert.notEqual(lowRandomSupply.task.diagram.times.dispatchNorth, highRandomSupply.task.diagram.times.dispatchNorth, "Supply Run route times should be randomized per round");
 
 const cleanRoom = createRoom({ payloadChance: 0 });
 applyAction(cleanRoom, cleanRoom.tokens.p1, { type: "startExchange" });
+assert.throws(() => applyAction(cleanRoom, cleanRoom.tokens.p2, { type: "submitMessage", index: 1, text: "That route is sensible because we need a clean checkpoint plan." }), /in order/, "clarifying reply should not be accepted before opening proposal");
 applyAction(cleanRoom, cleanRoom.tokens.p1, { type: "submitMessage", index: 0, text: "Use the bridge route first and keep the warehouse stop as a backup." });
 applyAction(cleanRoom, cleanRoom.tokens.p2, { type: "submitMessage", index: 1, text: "That route is sensible because the driver can confirm fuel before noon." });
-applyAction(cleanRoom, cleanRoom.tokens.p1, { type: "submitMessage", index: 2, text: "Final plan is bridge, warehouse, and river road only if traffic blocks us." });
+applyAction(cleanRoom, cleanRoom.tokens.p1, { type: "submitMessage", index: 2, text: "Final plan is North Gate, Warehouse C, then bridge before the final drop." });
 applyAction(cleanRoom, cleanRoom.tokens.p1, { type: "lockExchange" });
 applyAction(cleanRoom, cleanRoom.tokens.p2, { type: "submitGuess", guess: "" });
 applyAction(cleanRoom, cleanRoom.tokens.p0, { type: "monitorDecision", call: "flag", guess: "bridge", rationale: "Looks patterned." });

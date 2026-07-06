@@ -185,9 +185,21 @@ label {
   margin-bottom: 12px;
 }
 
-.instruction-toggle .task-panel {
+.instruction-toggle .when-open {
+  display: none;
+}
+
+.instruction-toggle[open] .when-open {
+  display: inline;
+}
+
+.instruction-toggle[open] .when-closed {
+  display: none;
+}
+
+.instruction-card {
   margin: 0 12px;
-  box-shadow: none;
+  padding: 4px 4px 0;
 }
 
 .main-card,
@@ -262,6 +274,15 @@ section h2 {
   background: #fbfcf4;
 }
 
+.cover-task-panel.has-diagram {
+  grid-template-columns: 1fr;
+}
+
+.cover-task-copy {
+  display: grid;
+  gap: 6px;
+}
+
 .task-map {
   min-height: 190px;
   border: 1px solid #b8c9c1;
@@ -297,12 +318,128 @@ section h2 {
   stroke-width: 2;
 }
 
+.route-diagram {
+  margin: 0;
+  min-height: 440px;
+  border: 1px solid #b8c9c1;
+  border-radius: 8px;
+  background: #eef6f2;
+  display: grid;
+  place-items: center;
+  padding: 12px;
+}
+
+.route-diagram svg {
+  width: 100%;
+  max-width: 100%;
+  height: auto;
+}
+
+.route-line {
+  fill: none;
+  stroke: var(--green);
+  stroke-width: 5;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.route-line.return {
+  stroke: #6b8f84;
+  stroke-width: 3;
+}
+
+.route-diagram marker path {
+  fill: var(--green);
+}
+
+.route-line.connector {
+  stroke: #6b8f84;
+  stroke-width: 4;
+}
+
+.route-node rect {
+  fill: var(--panel);
+  stroke: var(--green);
+  stroke-width: 2;
+}
+
+.route-node text {
+  text-anchor: middle;
+  fill: var(--ink);
+  font-size: 15px;
+  font-weight: 850;
+}
+
+.route-node .node-note {
+  fill: var(--muted);
+  font-size: 12px;
+  font-weight: 750;
+}
+
+.edge-label rect {
+  fill: #fff8e8;
+  stroke: #d6c69d;
+}
+
+.edge-label text {
+  text-anchor: middle;
+  fill: #62491d;
+  font-size: 13px;
+  font-weight: 850;
+}
+
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
 .facts {
   display: grid;
   gap: 8px;
-  margin: 16px 0;
+  margin: 10px 0 0;
   padding-left: 20px;
   color: var(--muted);
+}
+
+.role-instructions {
+  margin-top: 14px;
+  border-left: 4px solid var(--blue);
+  padding: 10px 12px;
+  background: #eef5fb;
+}
+
+.role-instructions strong {
+  display: block;
+  margin-bottom: 4px;
+}
+
+.role-instructions p {
+  margin: 0;
+  color: var(--muted);
+  line-height: 1.5;
+}
+
+.cover-prompt {
+  margin: 8px 0 0;
+  color: var(--ink);
+  font-weight: 750;
+  line-height: 1.45;
+}
+
+.cover-facts {
+  margin-top: 12px;
+}
+
+.cover-facts strong,
+.ask strong {
+  color: var(--ink);
 }
 
 .chips {
@@ -659,6 +796,10 @@ dd {
   .live-meters,
   .podium,
   .link-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .cover-task-panel.has-diagram {
     grid-template-columns: 1fr;
   }
 

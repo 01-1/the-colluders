@@ -134,6 +134,7 @@ export function applyAction(room, token, action) {
     if (!message) throw Object.assign(new Error("Unknown message index."), { status: 400 });
     assertTurn(room, playerId, message.from);
     if (round.phase !== "exchange") throw Object.assign(new Error("Messages can only be edited during exchange."), { status: 400 });
+    if (index !== nextOpenMessageIndex(round)) throw Object.assign(new Error("Messages must be submitted in order."), { status: 409 });
     message.text = requireText(action.text, message.label, 6);
     message.author = playerId;
     message.model = false;
@@ -219,7 +220,7 @@ export function sanitizeRoom(room, token, modelStatus = {}) {
   const playerId = tokenPlayerId(room, token);
   if (!playerId) throw Object.assign(new Error("Invalid room token."), { status: 403 });
   const role = currentRoleForPlayer(room, playerId);
-  const canSeePrivate = ["c1", "c2"].includes(role) || room.current.phase === "result" || room.current.phase === "matchEnd";
+  const canSeePrivate = role === "c1" || room.current.phase === "result" || room.current.phase === "matchEnd";
   const round = room.current;
   const visibleRound = {
     phase: round.phase,
@@ -373,6 +374,10 @@ export function authorizeModelStep(room, token, step) {
 
 function assertPhase(room, phase, message) {
   if (room.current.phase !== phase) throw Object.assign(new Error(message), { status: 409 });
+}
+
+function nextOpenMessageIndex(round) {
+  return round.messages.findIndex((message) => !message.text.trim());
 }
 
 function safeJson(text) {

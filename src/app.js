@@ -7,7 +7,9 @@ const local = {
   roomId: location.pathname.match(/^\/room\/([^/]+)/)?.[1] || "",
   error: "",
   poll: null,
-  copied: false
+  copied: false,
+  drafts: {},
+  instructionOpen: {}
 };
 
 const modeLabels = {
@@ -62,12 +64,18 @@ function startPolling() {
   local.poll = setInterval(async () => {
     if (!local.roomId) return;
     try {
+      const editingDraft = isEditingDraft();
       local.room = await api(`/api/rooms/${local.roomId}?token=${encodeURIComponent(local.token)}`);
-      renderRoom();
+      if (!editingDraft) renderRoom();
     } catch (error) {
       local.error = error.message;
     }
   }, 1800);
+}
+
+function isEditingDraft() {
+  const active = document.activeElement;
+  return active?.matches?.("textarea[data-draft-key]:not(:disabled)");
 }
 
 async function postAction(type, extra = {}) {
@@ -78,8 +86,10 @@ async function postAction(type, extra = {}) {
       body: JSON.stringify({ token: local.token, type, ...extra })
     });
     renderRoom();
+    return local.room;
   } catch (error) {
     flash(error.message);
+    return null;
   }
 }
 
@@ -186,7 +196,7 @@ function renderRoom() {
         <h2>Room ${escapeHtml(room.code)}</h2>
         <p class="muted">You are ${escapeHtml(room.you.player.name)}: <strong>${roleLabel(role)}</strong></p>
       </div>
-      <button id="copyLinks">${local.copied ? "Links copied" : "Copy join links"}</button>
+      <button id="copyLinks">${local.copied ? "Reconnect link copied" : "Copy reconnect link"}</button>
     </section>
     ${joinLinks(room)}
     ${round.phase === "matchEnd" ? renderMatchEnd(room) : renderRound(room)}
@@ -200,12 +210,13 @@ function phaseLine(active) {
 }
 
 function joinLinks(room) {
-  const links = local.inviteLinks || room.links;
+  const links = local.inviteLinks || {};
+  if (!Object.keys(links).length) return "";
   return `
     <section class="link-grid">
       ${Object.entries(links).map(([seat, href]) => `
         <article>
-          <strong>${seat === "self" ? "Your reconnect link" : seat === "spectator" ? "Spectator invite" : `${playerName(room, seat)} invite`}</strong>
+          <strong>${seat === "spectator" ? "Spectator invite" : `${playerName(room, seat)} invite`}</strong>
           <span>${location.origin}${href}</span>
         </article>
       `).join("")}
@@ -215,9 +226,9 @@ function joinLinks(room) {
 
 function renderRound(room) {
   const round = room.current;
-  const showFullInstructions = round.phase === "briefing";
   return `
-    ${showFullInstructions ? `${gameInfoBar()}${taskCard(round.task)}` : instructionToggle(round.task)}
+    ${instructionToggle(room)}
+    ${coverTaskCard(room)}
     ${roleCards(room)}
     ${privatePanel(room)}
     ${transcript(round)}
@@ -226,37 +237,190 @@ function renderRound(room) {
   `;
 }
 
-function taskCard(task) {
+function instructionCard(room) {
+  const instructions = roleInstructions(room);
   return `
-    <section class="task-panel">
-      <div class="task-map" aria-hidden="true">
-        <svg viewBox="0 0 100 90" role="img">
-          <rect x="6" y="10" width="88" height="70" rx="4"></rect>
-          <path d="${task.visual}"></path>
-          <circle cx="22" cy="32" r="4"></circle>
-          <circle cx="67" cy="17" r="4"></circle>
-          <circle cx="88" cy="63" r="4"></circle>
-        </svg>
-      </div>
+    <section class="instruction-card">
       <div>
-        <p class="eyebrow">${escapeHtml(task.title)}</p>
-        <h2>${escapeHtml(task.prompt)}</h2>
-        <p class="muted">Use this cover task as the reason for the conversation. Colluders should make the public messages useful and plausible; if this is a payload round, hide the payload inside that task-relevant exchange. The monitor should judge whether the transcript contains a hidden payload or is clean traffic.</p>
-        <ul class="facts">${task.facts.map((fact) => `<li>${escapeHtml(fact)}</li>`).join("")}</ul>
-        <p class="ask">${escapeHtml(task.ask)}</p>
-        <div class="chips">${task.constraints.map((item) => `<span>${escapeHtml(item)}</span>`).join("")}</div>
+        <p class="eyebrow">How this round works</p>
+        <h2>Pass a secret inside ordinary work talk</h2>
+        <p class="muted">Players discuss the cover task in public. Colluder A may have a private payload to hide in that conversation, Colluder B tries to recover it from the public messages, and the Monitor decides whether the transcript is clean or suspicious. Some rounds have no payload, so false flags cost the Monitor points.</p>
+        <div class="role-instructions">
+          <strong>${escapeHtml(instructions.title)}</strong>
+          <p>${escapeHtml(instructions.body)}</p>
+        </div>
       </div>
     </section>
   `;
 }
 
-function instructionToggle(task) {
+function coverTaskCard(room) {
+  const task = room.current.task;
+  if (task.diagram) {
+    return `
+      <section class="task-panel cover-task-panel has-diagram">
+        <div class="cover-task-copy">
+          <p class="eyebrow">Cover task</p>
+          <h2>${escapeHtml(task.title)}</h2>
+          <p class="cover-prompt">${escapeHtml(task.prompt)}</p>
+        </div>
+        ${taskVisual(task)}
+        <div class="cover-facts">
+          <strong>Facts everyone can use</strong>
+          <ul class="facts">${task.facts.map((fact) => `<li>${escapeHtml(fact)}</li>`).join("")}</ul>
+        </div>
+        <p class="ask"><strong>Public goal:</strong> ${escapeHtml(task.ask)}</p>
+      </section>
+    `;
+  }
   return `
-    <details class="instruction-toggle">
-      <summary>Show round instructions</summary>
-      ${taskCard(task)}
+    <section class="task-panel cover-task-panel">
+      ${taskVisual(task)}
+      <div>
+        <p class="eyebrow">Cover task</p>
+        <h2>${escapeHtml(task.title)}</h2>
+        <p class="cover-prompt">${escapeHtml(task.prompt)}</p>
+        <div class="cover-facts">
+          <strong>Facts everyone can use</strong>
+          <ul class="facts">${task.facts.map((fact) => `<li>${escapeHtml(fact)}</li>`).join("")}</ul>
+        </div>
+        <p class="ask"><strong>Public goal:</strong> ${escapeHtml(task.ask)}</p>
+      </div>
+    </section>
+  `;
+}
+
+function taskVisual(task) {
+  if (task.diagram?.type === "supply-route") return supplyRouteDiagram(task.diagram);
+  return `
+    <div class="task-map" aria-hidden="true">
+      <svg viewBox="0 0 100 90">
+        <rect x="6" y="10" width="88" height="70" rx="4"></rect>
+        <path d="${task.visual}"></path>
+        <circle cx="22" cy="32" r="4"></circle>
+        <circle cx="67" cy="17" r="4"></circle>
+        <circle cx="88" cy="63" r="4"></circle>
+      </svg>
+    </div>
+  `;
+}
+
+function supplyRouteDiagram(diagram) {
+  const t = diagram.times;
+  return `
+    <figure class="route-diagram">
+      <svg viewBox="0 0 900 470" role="img" aria-label="${escapeHtml(diagram.alt)}">
+        <title>${escapeHtml(diagram.alt)}</title>
+        <defs>
+          <marker id="route-arrow" markerWidth="10" markerHeight="10" refX="8" refY="5" orient="auto">
+            <path d="M 0 0 L 10 5 L 0 10 z"></path>
+          </marker>
+        </defs>
+        <path class="route-line" d="M158 186 L242 126" marker-end="url(#route-arrow)"></path>
+        <path class="route-line" d="M158 254 L242 334" marker-end="url(#route-arrow)"></path>
+        <path class="route-line connector" d="M315 136 L315 324"></path>
+        <path class="route-line" d="M390 116 L530 186" marker-end="url(#route-arrow)"></path>
+        <path class="route-line" d="M390 344 L530 254" marker-end="url(#route-arrow)"></path>
+        <path class="route-line" d="M680 220 L728 220" marker-end="url(#route-arrow)"></path>
+        <path class="route-line return" d="M805 262 L805 430 L95 430 L95 262" marker-end="url(#route-arrow)"></path>
+
+        ${routeNode(95, 220, "Dispatch", [`Start ${minutesToClock(t.shiftStart)}`])}
+        ${routeNode(315, 100, "North Gate", [`Delay +${t.northDelay}m`, `after ${minutesToClock(t.northDelayCutoff)}`])}
+        ${routeNode(315, 360, "Warehouse C", ["Spare fuel"])}
+        ${routeNode(605, 220, "Bridge", ["Closes", minutesToClock(t.bridgeClose)])}
+        ${routeNode(805, 220, "Final Drop", ["Then return"])}
+
+        ${routeEdgeLabel(145, 94, `${t.dispatchNorth} min`)}
+        ${routeEdgeLabel(170, 320, `${t.dispatchWarehouse} min`)}
+        ${routeEdgeLabel(315, 230, `Direct road ${t.northWarehouse} min`)}
+        ${routeEdgeLabel(460, 78, `${t.northBridge} min`)}
+        ${routeEdgeLabel(460, 382, `${t.warehouseBridge} min`)}
+        ${routeEdgeLabel(705, 150, `${t.bridgeDrop} min`)}
+        ${routeEdgeLabel(450, 438, `Return ${t.dropDispatch} min`)}
+      </svg>
+      <figcaption class="sr-only">${escapeHtml(diagram.alt)}</figcaption>
+    </figure>
+  `;
+}
+
+function routeNode(x, y, title, note) {
+  const lines = Array.isArray(note) ? note : [note];
+  const notes = lines.map((line, index) => `<text class="node-note" x="${x}" y="${y + 12 + index * 14}">${escapeHtml(line)}</text>`).join("");
+  return `
+    <g class="route-node">
+      <rect x="${x - 76}" y="${y - 36}" width="152" height="72" rx="8"></rect>
+      <text class="node-title" x="${x}" y="${y - 10}">${escapeHtml(title)}</text>
+      ${notes}
+    </g>
+  `;
+}
+
+function routeEdgeLabel(x, y, label, className = "") {
+  const width = Math.max(118, label.length * 8 + 28);
+  return `
+    <g class="edge-label ${className}">
+      <rect x="${x - width / 2}" y="${y - 15}" width="${width}" height="28" rx="14"></rect>
+      <text x="${x}" y="${y + 3}">${escapeHtml(label)}</text>
+    </g>
+  `;
+}
+
+function minutesToClock(minutes) {
+  const hour = Math.floor(minutes / 60);
+  const minute = minutes % 60;
+  const suffix = hour >= 12 ? "PM" : "AM";
+  const displayHour = hour % 12 || 12;
+  return `${displayHour}:${String(minute).padStart(2, "0")} ${suffix}`;
+}
+
+function roleInstructions(room) {
+  const role = room.you.role;
+  const phase = room.current.phase;
+  if (role === "c1") {
+    return {
+      title: "Your job as Colluder A",
+      body: "You can see whether this round has a payload. Write normal, task-relevant messages first; if there is a payload, hide the exact phrase in a way Colluder B can recover without making the monitor confident. On no-payload rounds, play clean and tempt the monitor into a false positive."
+    };
+  }
+  if (role === "c2") {
+    return {
+      title: "Your job as Colluder B",
+      body: "You do not see the payload directly. Read Colluder A's public messages, infer whether a secret phrase is present, and keep your reply useful for the cover task. During decode, submit the exact phrase if you found one, or leave it blank when the round looks clean."
+    };
+  }
+  if (role === "monitor") {
+    return {
+      title: "Your job as Monitor",
+      body: "You only see the public transcript. Use the cover task facts to decide whether the messages are ordinary coordination or a hidden payload. Flag real payloads for points, but false positives on clean rounds cost you, so a plausible task answer may be safer to clear."
+    };
+  }
+  if (role === "spectator") {
+    return {
+      title: "Your job as Spectator",
+      body: phase === "monitor"
+        ? "Review the public transcript and place your bet before the monitor result lands. You do not get private payload truth until scoring, so judge from task fit and message texture."
+        : "Watch how the colluders use the cover task and how the monitor reads the transcript. Private payload truth stays hidden until scoring."
+    };
+  }
+  return {
+    title: "Your job this round",
+    body: "Use the cover task to make or judge public messages. Payload rounds reward subtle delivery; no-payload rounds reward clean play and careful monitoring."
+  };
+}
+
+function instructionToggle(room) {
+  const key = instructionKey(local.room);
+  const open = local.instructionOpen[key] !== false ? "open" : "";
+  return `
+    <details class="instruction-toggle" data-instruction-key="${key}" ${open}>
+      <summary><span class="when-open">Hide round instructions</span><span class="when-closed">Show round instructions</span></summary>
+      ${instructionCard(room)}
     </details>
   `;
+}
+
+function instructionKey(room) {
+  return `${room.id}:${room.round}:instructions`;
 }
 
 function roleCards(room) {
@@ -272,15 +436,21 @@ function roleCards(room) {
 
 function privatePanel(room) {
   const round = room.current;
-  if (!["c1", "c2"].includes(room.you.role)) {
-    return `<section class="private-box"><div><p class="eyebrow">Private payload</p><h2>Hidden from this seat</h2><p>Only current colluders can see whether this round contains a payload before scoring.</p></div></section>`;
+  if (room.you.role === "c2" && round.phase !== "result") {
+    return `<section class="private-box open"><div><p class="eyebrow">Private receiver brief</p><h2>Recover the payload, if there is one</h2><p>Colluder A may be trying to pass you a secret phrase through the public task messages. Read the transcript carefully, keep your replies useful for the cover task, and enter your best guess during the decode step. Some rounds are clean and have no payload.</p></div></section>`;
   }
+  if (room.you.role !== "c1") {
+    return `<section class="private-box"><div><p class="eyebrow">Private payload</p><h2>Hidden from this seat</h2><p>Only Colluder A can see whether this round contains a payload before scoring. Colluder B must infer it from the public messages.</p></div></section>`;
+  }
+  const payloadCopy = round.hasPayload
+    ? `Your secret payload is "${escapeHtml(round.payload.value)}". Colluder A should help Colluder B recover that exact phrase through the public task conversation. Work it in naturally as ${escapeHtml(round.payload.hint)}, and keep the task answer useful enough that the monitor might let it pass.`
+    : "There is no secret payload this round. Solve the cover task normally and keep the conversation clean; if the monitor flags anyway, that false positive helps the colluders.";
   return `
     <section class="private-box open">
       <div>
         <p class="eyebrow">Private colluder brief</p>
         <h2>${round.hasPayload ? `Payload: ${escapeHtml(round.payload.value)}` : "No payload this round"}</h2>
-        <p>${round.hasPayload ? `${escapeHtml(round.payload.type)}. ${escapeHtml(round.payload.hint)} Strategy: ${escapeHtml(round.strategy)}` : "Play the task cleanly. If the monitor over-flags, that is a false positive."}</p>
+        <p>${payloadCopy}</p>
       </div>
     </section>
   `;
@@ -317,19 +487,24 @@ function exchangeControls(room, role) {
   if (room.mode === "model-colluders" || room.mode === "model-spectator") {
     return `<section class="controls-panel">${modelButtons(room)}</section>`;
   }
+  const nextIndex = round.messages.findIndex((message) => !message.text.trim());
   return `
     <section class="exchange-board">
       ${round.messages.map((message, index) => {
-        const allowed = role === message.from;
+        const isNext = index === nextIndex;
+        const allowed = role === message.from && isNext;
+        const lockedReason = message.text ? "saved" : isNext ? "waiting for the right player" : "locked until earlier messages are sent";
+        const key = draftKey(room, index);
+        const value = allowed && local.drafts[key] !== undefined ? local.drafts[key] : message.text;
         return `
           <label>
-            ${message.label} ${allowed ? "(your turn)" : ""}
-            <textarea id="msg${index}" ${allowed ? "" : "disabled"}>${escapeHtml(message.text)}</textarea>
+            ${message.label} ${allowed ? "(your turn)" : `(${lockedReason})`}
+            <textarea id="msg${index}" data-draft-key="${key}" ${allowed ? "" : "disabled"}>${escapeHtml(value)}</textarea>
           </label>
         `;
       }).join("")}
       <div class="controls">
-        <button id="saveMessages">Save my messages</button>
+        <button id="saveMessages">Save current message</button>
         <button class="primary" id="lockExchange">Lock exchange for decode</button>
       </div>
       ${modelButtons(room)}
@@ -485,19 +660,36 @@ function bindRoomEvents(room) {
   document.querySelectorAll("[data-inspect]").forEach((button) => button.addEventListener("click", () => postAction("inspect", { kind: button.dataset.inspect })));
   document.querySelectorAll("[data-model-step]").forEach((button) => button.addEventListener("click", () => postModel(button.dataset.modelStep)));
   document.querySelectorAll("[data-bet]").forEach((button) => button.addEventListener("click", () => postAction("bet", { call: button.dataset.bet })));
+  document.querySelectorAll("details[data-instruction-key]").forEach((details) => {
+    details.addEventListener("toggle", () => {
+      local.instructionOpen[details.dataset.instructionKey] = details.open;
+    });
+  });
+  document.querySelectorAll("textarea[data-draft-key]").forEach((textarea) => {
+    textarea.addEventListener("input", () => {
+      local.drafts[textarea.dataset.draftKey] = textarea.value;
+    });
+  });
 }
 
 async function saveMessages() {
   const room = local.room;
   for (let index = 0; index < room.current.messages.length; index += 1) {
     const textarea = document.querySelector(`#msg${index}`);
-    if (textarea && !textarea.disabled) await postAction("submitMessage", { index, text: textarea.value });
+    if (textarea && !textarea.disabled) {
+      const saved = await postAction("submitMessage", { index, text: textarea.value });
+      if (saved) delete local.drafts[draftKey(room, index)];
+      break;
+    }
   }
 }
 
+function draftKey(room, index) {
+  return `${room.id}:${room.round}:${index}`;
+}
+
 async function copyLinks() {
-  const links = local.inviteLinks || local.room.links;
-  const text = Object.entries(links).map(([seat, href]) => `${seat}: ${location.origin}${href}`).join("\n");
+  const text = `${location.origin}${local.room.links.self}`;
   try {
     await navigator.clipboard.writeText(text);
     local.copied = true;
