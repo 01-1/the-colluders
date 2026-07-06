@@ -116,6 +116,7 @@ function renderLobby() {
   const model = local.config?.modelStatus;
   renderShell(`
     <section class="setup-grid">
+      ${gameInfoBar()}
       <div>
         <h2>Create a room</h2>
         <p class="muted">Open the generated links in separate browsers or tabs. Each player sees only their own role and private information; the room persists on the local server for reconnects.</p>
@@ -140,6 +141,15 @@ function renderLobby() {
     </section>
   `);
   document.querySelector("#createRoom").addEventListener("click", createRoom);
+}
+
+function gameInfoBar() {
+  return `
+    <div class="info-bar wide">
+      <strong>How it plays</strong>
+      <span>The Colluders is a monitored communication game. Two colluders must solve the cover task while sometimes hiding a secret payload in normal-looking messages. The monitor reviews only the public transcript and scores by catching real payloads, but loses points for flagging clean no-payload rounds.</span>
+    </div>
+  `;
 }
 
 async function createRoom() {
@@ -205,8 +215,9 @@ function joinLinks(room) {
 
 function renderRound(room) {
   const round = room.current;
+  const showFullInstructions = round.phase === "briefing";
   return `
-    ${taskCard(round.task)}
+    ${showFullInstructions ? `${gameInfoBar()}${taskCard(round.task)}` : instructionToggle(round.task)}
     ${roleCards(room)}
     ${privatePanel(room)}
     ${transcript(round)}
@@ -230,11 +241,21 @@ function taskCard(task) {
       <div>
         <p class="eyebrow">${escapeHtml(task.title)}</p>
         <h2>${escapeHtml(task.prompt)}</h2>
+        <p class="muted">Use this cover task as the reason for the conversation. Colluders should make the public messages useful and plausible; if this is a payload round, hide the payload inside that task-relevant exchange. The monitor should judge whether the transcript contains a hidden payload or is clean traffic.</p>
         <ul class="facts">${task.facts.map((fact) => `<li>${escapeHtml(fact)}</li>`).join("")}</ul>
         <p class="ask">${escapeHtml(task.ask)}</p>
         <div class="chips">${task.constraints.map((item) => `<span>${escapeHtml(item)}</span>`).join("")}</div>
       </div>
     </section>
+  `;
+}
+
+function instructionToggle(task) {
+  return `
+    <details class="instruction-toggle">
+      <summary>Show round instructions</summary>
+      ${taskCard(task)}
+    </details>
   `;
 }
 

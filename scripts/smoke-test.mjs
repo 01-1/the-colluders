@@ -24,6 +24,8 @@ const server = await readFile(new URL("../server.js", import.meta.url), "utf8");
 
 for (const phrase of [
   "Create multiplayer room",
+  "How it plays",
+  "Show round instructions",
   "Copy join links",
   "Model mode is offline",
   "Generate LLM colluder exchange",

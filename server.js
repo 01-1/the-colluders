@@ -6,6 +6,7 @@ import { modeCatalog } from "./src/game-core.js";
 import { applyAction, authorizeModelStep, claimInvite, createRoom, dumpRooms, inviteLinks, loadRooms, runModelStep, sanitizeRoom, tokenPlayerId } from "./src/server-game.js";
 
 const root = new URL(".", import.meta.url).pathname;
+const localEnvFile = join(root, ".env");
 const dataDir = join(root, "data");
 const roomFile = join(dataDir, "rooms.json");
 const port = Number(process.env.PORT || 4177);
@@ -24,7 +25,7 @@ const modelClient = createModelClient({ apiKey: await readOpenRouterKey() });
 async function readOpenRouterKey() {
   if (process.env.OPENROUTER_API_KEY) return process.env.OPENROUTER_API_KEY;
   try {
-    const env = parseEnv(await readFile(join(root, ".env"), "utf8"));
+    const env = parseEnv(await readFile(localEnvFile, "utf8"));
     return env.OPENROUTER_API_KEY || "";
   } catch {
     return "";

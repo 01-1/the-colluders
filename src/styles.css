@@ -139,6 +139,57 @@ label {
   grid-template-columns: 1fr;
 }
 
+.info-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+  border: 1px solid #c7d5e1;
+  border-radius: 8px;
+  background: #f3f7fb;
+  color: var(--ink);
+  padding: 12px 14px;
+}
+
+.info-bar strong {
+  white-space: nowrap;
+}
+
+.info-bar span {
+  color: var(--muted);
+  line-height: 1.4;
+}
+
+.instruction-toggle {
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #f8faf8;
+}
+
+.instruction-toggle summary {
+  min-height: 44px;
+  display: flex;
+  align-items: center;
+  padding: 0 14px;
+  color: var(--ink);
+  cursor: pointer;
+  font-weight: 850;
+}
+
+.instruction-toggle[open] {
+  padding-bottom: 12px;
+}
+
+.instruction-toggle[open] summary {
+  border-bottom: 1px solid var(--line);
+  margin-bottom: 12px;
+}
+
+.instruction-toggle .task-panel {
+  margin: 0 12px;
+  box-shadow: none;
+}
+
 .main-card,
 .scoreboard {
   background: rgba(255, 255, 251, 0.96);
