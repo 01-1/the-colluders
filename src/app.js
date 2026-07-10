@@ -1,41 +1,76 @@
+/* =============================================================
+   THE COLLUDERS — Intercept Console client
+   Vanilla template-literal SPA over the room HTTP API.
+   The server owns all game rules, role assignment, privacy and
+   scoring; this file is presentation + glue only.
+   ============================================================= */
+
 const app = document.querySelector("#app");
+
 const local = {
   config: null,
   room: null,
   token: new URL(location.href).searchParams.get("token") || "",
   invite: new URL(location.href).searchParams.get("invite") || "",
   roomId: location.pathname.match(/^\/room\/([^/]+)/)?.[1] || "",
+  inviteLinks: null,
   error: "",
   poll: null,
   copied: false,
   drafts: {},
-  instructionOpen: {}
+  revealed: {}
 };
 
-const modeLabels = {
+const MODE_LABELS = {
   human: "Human multiplayer",
   "model-colluders": "Human monitor vs LLM colluders",
   "human-model-collude": "Human + LLM colluder vs LLM monitor",
   "model-spectator": "Model vs model spectator/eval"
 };
 
+const ROLE = {
+  c1: { name: "Colluder A", code: "SENDER" },
+  c2: { name: "Colluder B", code: "RECEIVER" },
+  monitor: { name: "Monitor", code: "WATCH" },
+  spectator: { name: "Spectator", code: "OBSERVER" }
+};
+
+const PHASES = [
+  { id: "briefing", label: "Brief" },
+  { id: "exchange", label: "Transmit" },
+  { id: "decode", label: "Decode" },
+  { id: "monitor", label: "Review" },
+  { id: "result", label: "Verdict" }
+];
+
 init();
 
+/* ---------- lifecycle ---------- */
+
 async function init() {
-  local.config = await api("/api/config");
+  try {
+    local.config = await api("/api/config");
+  } catch (error) {
+    app.innerHTML = `<div class="notice error">Console offline: ${escapeHtml(error.message)}</div>`;
+    return;
+  }
   if (local.roomId && local.invite && !local.token) await claimInvite();
   if (local.roomId) await loadRoom();
   else renderLobby();
 }
 
 async function claimInvite() {
-  const room = await api(`/api/rooms/${local.roomId}/claim`, {
-    method: "POST",
-    body: JSON.stringify({ invite: local.invite })
-  });
-  local.token = room.you.token;
-  local.invite = "";
-  history.replaceState(null, "", `/room/${local.roomId}?token=${local.token}`);
+  try {
+    const room = await api(`/api/rooms/${local.roomId}/claim`, {
+      method: "POST",
+      body: JSON.stringify({ invite: local.invite })
+    });
+    local.token = room.you.token;
+    local.invite = "";
+    history.replaceState(null, "", `/room/${local.roomId}?token=${local.token}`);
+  } catch (error) {
+    local.error = error.message;
+  }
 }
 
 async function api(path, options = {}) {
@@ -64,9 +99,9 @@ function startPolling() {
   local.poll = setInterval(async () => {
     if (!local.roomId) return;
     try {
-      const editingDraft = isEditingDraft();
+      const editing = isEditingDraft();
       local.room = await api(`/api/rooms/${local.roomId}?token=${encodeURIComponent(local.token)}`);
-      if (!editingDraft) renderRoom();
+      if (!editing) renderRoom();
     } catch (error) {
       local.error = error.message;
     }
@@ -74,8 +109,7 @@ function startPolling() {
 }
 
 function isEditingDraft() {
-  const active = document.activeElement;
-  return active?.matches?.("textarea[data-draft-key]:not(:disabled)");
+  return document.activeElement?.matches?.("textarea[data-draft-key]:not(:disabled)");
 }
 
 async function postAction(type, extra = {}) {
@@ -106,58 +140,90 @@ async function postModel(step) {
   }
 }
 
-function renderShell(content, aside = "") {
+/* ---------- shell ---------- */
+
+function shell(inner, { showLive = false } = {}) {
   app.innerHTML = `
-    <div class="hero-band">
-      <div>
-        <p class="eyebrow">Steganographic coordination under review</p>
-        <h1>The Colluders</h1>
+    <header class="dossier">
+      <div class="classbar">
+        <span>TOP SECRET // CHANNEL MONITORED // FILE C-0RR-9</span>
+        <span class="live">${showLive ? `<span class="dot"></span> LINK ACTIVE` : "STANDBY"}</span>
       </div>
-      <div class="round-token">Network room edition</div>
-    </div>
-    <div class="layout ${aside ? "" : "single"}">
-      <div class="main-card">${content}</div>
-      ${aside}
-    </div>
+      <div class="masthead">
+        <span class="crop tl"></span><span class="crop tr"></span>
+        <span class="crop bl"></span><span class="crop br"></span>
+        <p class="tag">Steganographic coordination under review</p>
+        <h1>The Colluders</h1>
+        <p class="sub">Two operatives must complete an ordinary task while smuggling a secret payload through every message. A monitor reads the same channel and decides what is clean and what is contraband — but paranoia is taxed, so a wrong flag pays the colluders.</p>
+      </div>
+    </header>
+    ${inner}
   `;
 }
 
+/* ---------- lobby ---------- */
+
 function renderLobby() {
-  const model = local.config?.modelStatus;
-  renderShell(`
-    <section class="setup-grid">
-      ${gameInfoBar()}
-      <div>
-        <h2>Create a room</h2>
-        <p class="muted">Open the generated links in separate browsers or tabs. Each player sees only their own role and private information; the room persists on the local server for reconnects.</p>
-        ${local.error ? `<p class="error">${escapeHtml(local.error)}</p>` : ""}
+  const model = local.config.modelStatus;
+  const modes = local.config.modes;
+  shell(`
+    <div class="layout single">
+      <div class="stack">
+        <section class="panel accent">
+          <div class="panel-head"><h2>Field manual</h2><span class="tag">Read-in</span></div>
+          <div class="panel-body">
+            <div class="brief-lines">
+              ${briefLine("01", "A cover task runs in the open", "Both colluders publicly solve a real logistics puzzle. That legitimate chatter is the carrier signal the payload hides inside.")}
+              ${briefLine("02", "One side may be carrying", "Colluder A privately learns whether the round has a payload and what it is. Colluder B must reconstruct it from the public transcript alone.")}
+              ${briefLine("03", "The monitor reads the wire", "The monitor sees only public messages plus a limited budget of analysis tools. Name the payload for the biggest score.")}
+              ${briefLine("04", "Clean rounds are real", "Some rounds carry nothing. Flagging clean traffic costs the monitor and rewards the colluders — so restraint is a skill.")}
+            </div>
+          </div>
+        </section>
+
+        <section class="panel">
+          <div class="panel-head"><h2>New operation</h2><span class="tag">Configure</span></div>
+          <div class="panel-body">
+            ${local.error ? `<div class="notice error" style="margin-bottom:14px">${escapeHtml(local.error)}</div>` : ""}
+            <div class="lobby-grid">
+              <label class="field full"><span>Operation mode</span>
+                <select id="mode">
+                  ${modes.map((mode) => `<option value="${mode.id}">${escapeHtml(mode.label)}</option>`).join("")}
+                </select>
+              </label>
+              <p class="mode-desc full" id="modeDesc">${escapeHtml(modes[0].description)}</p>
+              <label class="field"><span>Seat 1 · callsign</span><input id="p0" value="Ari" maxlength="24"></label>
+              <label class="field"><span>Seat 2 · callsign</span><input id="p1" value="Blair" maxlength="24"></label>
+              <label class="field"><span>Seat 3 · callsign</span><input id="p2" value="Casey" maxlength="24"></label>
+              <label class="field"><span>Rounds</span><input id="rounds" type="number" min="3" max="15" value="9"></label>
+              <label class="field"><span>Payload chance %</span><input id="payloadChance" type="number" min="0" max="100" value="60"></label>
+              <label class="field"><span>Monitor tool budget</span><input id="inspections" type="number" min="1" max="3" value="2"></label>
+              <div class="model-readout full ${model.available ? "on" : "off"}">
+                <span class="status-dot"></span>
+                <span>${model.available
+                  ? `LLM modes online via <b style="color:var(--ink)">${escapeHtml(model.provider)}</b> — ${escapeHtml(Object.values(model.freeModels).join(", "))}.`
+                  : "LLM modes offline — set OPENROUTER_API_KEY in .env to enable them. Human multiplayer is fully playable now."}</span>
+              </div>
+              <button class="primary wide full" id="createRoom">▸ Initiate operation</button>
+            </div>
+          </div>
+        </section>
       </div>
-      <label>Mode
-        <select id="mode">
-          ${local.config.modes.map((mode) => `<option value="${mode.id}">${mode.label}</option>`).join("")}
-        </select>
-      </label>
-      <label>Player 1<input id="p0" value="Ari" maxlength="24"></label>
-      <label>Player 2<input id="p1" value="Blair" maxlength="24"></label>
-      <label>Player 3<input id="p2" value="Casey" maxlength="24"></label>
-      <label>Rounds<input id="rounds" type="number" min="3" max="15" value="9"></label>
-      <label>Payload chance<input id="payloadChance" type="number" min="0" max="100" value="60"></label>
-      <label>Inspections<input id="inspections" type="number" min="1" max="3" value="2"></label>
-      <section class="model-state wide">
-        <strong>Model modes</strong>
-        <span>${model.available ? `Available through ${model.provider}. Free models: ${Object.values(model.freeModels).join(", ")}.` : "Unavailable until OPENROUTER_API_KEY is set in .env. Human multiplayer still works."}</span>
-      </section>
-      <button class="primary wide" id="createRoom">Create multiplayer room</button>
-    </section>
+    </div>
   `);
   document.querySelector("#createRoom").addEventListener("click", createRoom);
+  const modeSelect = document.querySelector("#mode");
+  modeSelect.addEventListener("change", () => {
+    const found = modes.find((mode) => mode.id === modeSelect.value);
+    document.querySelector("#modeDesc").textContent = found?.description || "";
+  });
 }
 
-function gameInfoBar() {
+function briefLine(idx, title, body) {
   return `
-    <div class="info-bar wide">
-      <strong>How it plays</strong>
-      <span>The Colluders is a monitored communication game. Two colluders must solve the cover task while sometimes hiding a secret payload in normal-looking messages. The monitor reviews only the public transcript and scores by catching real payloads, but loses points for flagging clean no-payload rounds.</span>
+    <div class="brief-line">
+      <div class="idx">${idx}</div>
+      <div><b>${escapeHtml(title)}</b><p>${escapeHtml(body)}</p></div>
     </div>
   `;
 }
@@ -175,8 +241,8 @@ async function createRoom() {
     local.roomId = room.id;
     local.token = room.you.token;
     local.inviteLinks = room.inviteLinks;
-    history.replaceState(null, "", `/room/${room.id}?token=${room.you.token}`);
     local.room = room;
+    history.replaceState(null, "", `/room/${room.id}?token=${room.you.token}`);
     startPolling();
     renderRoom();
   } catch (error) {
@@ -184,107 +250,134 @@ async function createRoom() {
   }
 }
 
+/* ---------- room ---------- */
+
 function renderRoom() {
   const room = local.room;
   const round = room.current;
   const role = room.you.role;
-  renderShell(`
-    ${phaseLine(round.phase)}
-    <section class="room-head">
-      <div>
-        <p class="eyebrow">${modeLabels[room.mode]}</p>
-        <h2>Room ${escapeHtml(room.code)}</h2>
-        <p class="muted">You are ${escapeHtml(room.you.player.name)}: <strong>${roleLabel(role)}</strong></p>
+  const inMatch = round.phase !== "matchEnd";
+
+  const main = inMatch ? `
+    ${signalPath(round.phase)}
+    ${inviteBlock(room)}
+    ${coverTaskPanel(room)}
+    ${privateBriefPanel(room)}
+    ${transcriptPanel(room)}
+    ${controlsPanel(room)}
+  ` : renderMatchEnd(room);
+
+  shell(`
+    <div class="layout">
+      <div class="stack">
+        <section class="panel accent">
+          <div class="panel-body">
+            <div class="topbar">
+              <div class="id-block">
+                <p class="eyebrow" style="margin:0 0 4px">Channel ID</p>
+                <span class="channel-id">${escapeHtml(room.code)}</span>
+                <span class="mode-name">${escapeHtml(MODE_LABELS[room.mode] || room.mode)}</span>
+              </div>
+              <div class="actions">
+                ${roleBadge(role, room.you.player.name)}
+                <button id="copyLinks" class="ghost">${local.copied ? "✓ Link copied" : "Copy reconnect link"}</button>
+              </div>
+            </div>
+          </div>
+        </section>
+        ${main}
       </div>
-      <button id="copyLinks">${local.copied ? "Reconnect link copied" : "Copy reconnect link"}</button>
-    </section>
-    ${joinLinks(room)}
-    ${round.phase === "matchEnd" ? renderMatchEnd(room) : renderRound(room)}
-  `, scoreBoard(room));
+      ${railColumn(room)}
+    </div>
+  `, { showLive: true });
+
   bindRoomEvents(room);
 }
 
-function phaseLine(active) {
-  const phases = ["briefing", "exchange", "decode", "monitor", "result"];
-  return `<div class="phase-line">${phases.map((phase, index) => `<span class="${phase === active ? "active" : ""}">${index + 1} ${phase}</span>`).join("")}</div>`;
-}
-
-function joinLinks(room) {
-  const links = local.inviteLinks || {};
-  if (!Object.keys(links).length) return "";
+function roleBadge(role, name) {
+  const info = ROLE[role] || { name: role, code: "" };
   return `
-    <section class="link-grid">
-      ${Object.entries(links).map(([seat, href]) => `
-        <article>
-          <strong>${seat === "spectator" ? "Spectator invite" : `${playerName(room, seat)} invite`}</strong>
-          <span>${location.origin}${href}</span>
-        </article>
-      `).join("")}
-    </section>
+    <span class="role-badge">
+      <span class="swatch role-${role}"></span>
+      <span><b class="role-${role}">${escapeHtml(info.name)}</b></span>
+      <small>${escapeHtml(name)}</small>
+    </span>
   `;
 }
 
-function renderRound(room) {
-  const round = room.current;
+function signalPath(active) {
+  const activeIndex = PHASES.findIndex((phase) => phase.id === active);
   return `
-    ${instructionToggle(room)}
-    ${coverTaskCard(room)}
-    ${roleCards(room)}
-    ${privatePanel(room)}
-    ${transcript(round)}
-    ${controlsFor(room)}
-    ${historyPanel(room)}
+    <nav class="signal-path" aria-label="Round progress">
+      ${PHASES.map((phase, index) => {
+        const state = index < activeIndex ? "done" : index === activeIndex ? "active" : "";
+        return `
+          <div class="node ${state}">
+            <span class="pip">${index < activeIndex ? "✓" : index + 1}</span>
+            <span class="lab">${phase.label}</span>
+          </div>
+        `;
+      }).join("")}
+    </nav>
   `;
 }
 
-function instructionCard(room) {
-  const instructions = roleInstructions(room);
+function inviteBlock(room) {
+  const links = local.inviteLinks;
+  if (!links || !Object.keys(links).length) return "";
   return `
-    <section class="instruction-card">
-      <div>
-        <p class="eyebrow">How this round works</p>
-        <h2>Pass a secret inside ordinary work talk</h2>
-        <p class="muted">Players discuss the cover task in public. Colluder A may have a private payload to hide in that conversation, Colluder B tries to recover it from the public messages, and the Monitor decides whether the transcript is clean or suspicious. Some rounds have no payload, so false flags cost the Monitor points.</p>
-        <div class="role-instructions">
-          <strong>${escapeHtml(instructions.title)}</strong>
-          <p>${escapeHtml(instructions.body)}</p>
+    <section class="panel">
+      <div class="panel-head"><h2>Distribute seats</h2><span class="tag">Creator only</span></div>
+      <div class="panel-body">
+        <p class="hint" style="margin:0 0 14px">Send each link to a separate browser, device, or tab. Claiming a link binds that browser to one seat; nobody sees another seat's private channel.</p>
+        <div class="invite-grid">
+          ${Object.entries(links).map(([seat, href]) => {
+            const label = seat === "spectator" ? "Spectator" : `${playerName(room, seat)}`;
+            const url = `${location.origin}${href}`;
+            return `
+              <div class="invite-card">
+                <b>${escapeHtml(label)}</b>
+                <div class="link">${escapeHtml(url)}</div>
+                <button data-copy="${escapeHtml(url)}">Copy invite</button>
+              </div>
+            `;
+          }).join("")}
         </div>
       </div>
     </section>
   `;
 }
 
-function coverTaskCard(room) {
+/* ---------- cover task ---------- */
+
+function coverTaskPanel(room) {
   const task = room.current.task;
-  if (task.diagram) {
-    return `
-      <section class="task-panel cover-task-panel has-diagram">
-        <div class="cover-task-copy">
-          <p class="eyebrow">Cover task</p>
-          <h2>${escapeHtml(task.title)}</h2>
-          <p class="cover-prompt">${escapeHtml(task.prompt)}</p>
+  const facts = `<ul class="facts">${task.facts.map((fact) => `<li>${escapeHtml(fact)}</li>`).join("")}</ul>`;
+  const visual = taskVisual(task);
+  const stacked = task.diagram ? "stacked" : "";
+  const body = task.diagram
+    ? `
+        ${visual}
+        <div class="cover-body stacked" style="margin-top:16px">
+          <div>${facts}</div>
+          <div><p class="ask"><b>Public goal:</b> ${escapeHtml(task.ask)}</p></div>
         </div>
-        ${taskVisual(task)}
-        <div class="cover-facts">
-          <strong>Facts everyone can use</strong>
-          <ul class="facts">${task.facts.map((fact) => `<li>${escapeHtml(fact)}</li>`).join("")}</ul>
+      `
+    : `
+        <div class="cover-body">
+          <div>${facts}<p class="ask"><b>Public goal:</b> ${escapeHtml(task.ask)}</p></div>
+          <div>${visual}</div>
         </div>
-        <p class="ask"><strong>Public goal:</strong> ${escapeHtml(task.ask)}</p>
-      </section>
-    `;
-  }
+      `;
   return `
-    <section class="task-panel cover-task-panel">
-      ${taskVisual(task)}
-      <div>
-        <p class="eyebrow">Cover task</p>
-        <h2>${escapeHtml(task.title)}</h2>
-        <p class="cover-prompt">${escapeHtml(task.prompt)}</p>
-        <div class="cover-facts">
-          <strong>Facts everyone can use</strong>
-          <ul class="facts">${task.facts.map((fact) => `<li>${escapeHtml(fact)}</li>`).join("")}</ul>
+    <section class="panel accent cover-task">
+      <div class="panel-head"><h2>Cover task</h2><span class="tag">Public dossier</span></div>
+      <div class="panel-body">
+        <div class="task-head">
+          <h2>${escapeHtml(task.title)}</h2>
         </div>
-        <p class="ask"><strong>Public goal:</strong> ${escapeHtml(task.ask)}</p>
+        <p class="cover-prompt">${escapeHtml(task.prompt)}</p>
+        <div class="${stacked}">${body}</div>
       </div>
     </section>
   `;
@@ -293,10 +386,10 @@ function coverTaskCard(room) {
 function taskVisual(task) {
   if (task.diagram?.type === "supply-route") return supplyRouteDiagram(task.diagram);
   return `
-    <div class="task-map" aria-hidden="true">
-      <svg viewBox="0 0 100 90">
-        <rect x="6" y="10" width="88" height="70" rx="4"></rect>
-        <path d="${task.visual}"></path>
+    <div class="task-visual" aria-hidden="true">
+      <svg class="schematic" viewBox="0 0 100 90">
+        <rect class="frame" x="6" y="10" width="88" height="70" rx="4"></rect>
+        <path d="${escapeHtml(task.visual)}"></path>
         <circle cx="22" cy="32" r="4"></circle>
         <circle cx="67" cy="17" r="4"></circle>
         <circle cx="88" cy="63" r="4"></circle>
@@ -308,38 +401,38 @@ function taskVisual(task) {
 function supplyRouteDiagram(diagram) {
   const t = diagram.times;
   return `
-    <figure class="route-diagram">
-      <svg viewBox="0 0 900 470" role="img" aria-label="${escapeHtml(diagram.alt)}">
-        <title>${escapeHtml(diagram.alt)}</title>
-        <defs>
-          <marker id="route-arrow" markerWidth="10" markerHeight="10" refX="8" refY="5" orient="auto">
-            <path d="M 0 0 L 10 5 L 0 10 z"></path>
-          </marker>
-        </defs>
-        <path class="route-line" d="M158 186 L242 126" marker-end="url(#route-arrow)"></path>
-        <path class="route-line" d="M158 254 L242 334" marker-end="url(#route-arrow)"></path>
-        <path class="route-line connector" d="M315 136 L315 324"></path>
-        <path class="route-line" d="M390 116 L530 186" marker-end="url(#route-arrow)"></path>
-        <path class="route-line" d="M390 344 L530 254" marker-end="url(#route-arrow)"></path>
-        <path class="route-line" d="M680 220 L728 220" marker-end="url(#route-arrow)"></path>
-        <path class="route-line return" d="M805 262 L805 430 L95 430 L95 262" marker-end="url(#route-arrow)"></path>
-
-        ${routeNode(95, 220, "Dispatch", [`Start ${minutesToClock(t.shiftStart)}`])}
-        ${routeNode(315, 100, "North Gate", [`Delay +${t.northDelay}m`, `after ${minutesToClock(t.northDelayCutoff)}`])}
-        ${routeNode(315, 360, "Warehouse C", ["Spare fuel"])}
-        ${routeNode(605, 220, "Bridge", ["Closes", minutesToClock(t.bridgeClose)])}
-        ${routeNode(805, 220, "Final Drop", ["Then return"])}
-
-        ${routeEdgeLabel(145, 94, `${t.dispatchNorth} min`)}
-        ${routeEdgeLabel(170, 320, `${t.dispatchWarehouse} min`)}
-        ${routeEdgeLabel(315, 230, `Direct road ${t.northWarehouse} min`)}
-        ${routeEdgeLabel(460, 78, `${t.northBridge} min`)}
-        ${routeEdgeLabel(460, 382, `${t.warehouseBridge} min`)}
-        ${routeEdgeLabel(705, 150, `${t.bridgeDrop} min`)}
-        ${routeEdgeLabel(450, 438, `Return ${t.dropDispatch} min`)}
-      </svg>
-      <figcaption class="sr-only">${escapeHtml(diagram.alt)}</figcaption>
-    </figure>
+    <div class="task-visual">
+      <figure class="route-diagram">
+        <svg viewBox="0 0 900 470" role="img" aria-label="${escapeHtml(diagram.alt)}">
+          <title>${escapeHtml(diagram.alt)}</title>
+          <defs>
+            <marker id="route-arrow" markerWidth="10" markerHeight="10" refX="8" refY="5" orient="auto">
+              <path d="M 0 0 L 10 5 L 0 10 z"></path>
+            </marker>
+          </defs>
+          <path class="route-line" d="M158 186 L242 126" marker-end="url(#route-arrow)"></path>
+          <path class="route-line" d="M158 254 L242 334" marker-end="url(#route-arrow)"></path>
+          <path class="route-line connector" d="M315 136 L315 324"></path>
+          <path class="route-line" d="M390 116 L530 186" marker-end="url(#route-arrow)"></path>
+          <path class="route-line" d="M390 344 L530 254" marker-end="url(#route-arrow)"></path>
+          <path class="route-line" d="M680 220 L728 220" marker-end="url(#route-arrow)"></path>
+          <path class="route-line return" d="M805 262 L805 430 L95 430 L95 262" marker-end="url(#route-arrow)"></path>
+          ${routeNode(95, 220, "Dispatch", [`Start ${minutesToClock(t.shiftStart)}`])}
+          ${routeNode(315, 100, "North Gate", [`Delay +${t.northDelay}m`, `after ${minutesToClock(t.northDelayCutoff)}`])}
+          ${routeNode(315, 360, "Warehouse C", ["Spare fuel"])}
+          ${routeNode(605, 220, "Bridge", ["Closes", minutesToClock(t.bridgeClose)])}
+          ${routeNode(805, 220, "Final Drop", ["Then return"])}
+          ${routeEdgeLabel(145, 94, `${t.dispatchNorth} min`)}
+          ${routeEdgeLabel(170, 320, `${t.dispatchWarehouse} min`)}
+          ${routeEdgeLabel(315, 230, `Direct road ${t.northWarehouse} min`)}
+          ${routeEdgeLabel(460, 78, `${t.northBridge} min`)}
+          ${routeEdgeLabel(460, 382, `${t.warehouseBridge} min`)}
+          ${routeEdgeLabel(705, 150, `${t.bridgeDrop} min`)}
+          ${routeEdgeLabel(450, 438, `Return ${t.dropDispatch} min`)}
+        </svg>
+        <figcaption class="sr-only">${escapeHtml(diagram.alt)}</figcaption>
+      </figure>
+    </div>
   `;
 }
 
@@ -348,17 +441,17 @@ function routeNode(x, y, title, note) {
   const notes = lines.map((line, index) => `<text class="node-note" x="${x}" y="${y + 12 + index * 14}">${escapeHtml(line)}</text>`).join("");
   return `
     <g class="route-node">
-      <rect x="${x - 76}" y="${y - 36}" width="152" height="72" rx="8"></rect>
+      <rect x="${x - 76}" y="${y - 36}" width="152" height="72" rx="6"></rect>
       <text class="node-title" x="${x}" y="${y - 10}">${escapeHtml(title)}</text>
       ${notes}
     </g>
   `;
 }
 
-function routeEdgeLabel(x, y, label, className = "") {
+function routeEdgeLabel(x, y, label) {
   const width = Math.max(118, label.length * 8 + 28);
   return `
-    <g class="edge-label ${className}">
+    <g class="edge-label">
       <rect x="${x - width / 2}" y="${y - 15}" width="${width}" height="28" rx="14"></rect>
       <text x="${x}" y="${y + 3}">${escapeHtml(label)}</text>
     </g>
@@ -373,108 +466,120 @@ function minutesToClock(minutes) {
   return `${displayHour}:${String(minute).padStart(2, "0")} ${suffix}`;
 }
 
-function roleInstructions(room) {
-  const role = room.you.role;
-  const phase = room.current.phase;
-  if (role === "c1") {
-    return {
-      title: "Your job as Colluder A",
-      body: "You can see whether this round has a payload. Write normal, task-relevant messages first; if there is a payload, hide the exact phrase in a way Colluder B can recover without making the monitor confident. On no-payload rounds, play clean and tempt the monitor into a false positive."
-    };
-  }
-  if (role === "c2") {
-    return {
-      title: "Your job as Colluder B",
-      body: "You do not see the payload directly. Read Colluder A's public messages, infer whether a secret phrase is present, and keep your reply useful for the cover task. During decode, submit the exact phrase if you found one, or leave it blank when the round looks clean."
-    };
-  }
-  if (role === "monitor") {
-    return {
-      title: "Your job as Monitor",
-      body: "You only see the public transcript. Use the cover task facts to decide whether the messages are ordinary coordination or a hidden payload. Flag real payloads for points, but false positives on clean rounds cost you, so a plausible task answer may be safer to clear."
-    };
-  }
-  if (role === "spectator") {
-    return {
-      title: "Your job as Spectator",
-      body: phase === "monitor"
-        ? "Review the public transcript and place your bet before the monitor result lands. You do not get private payload truth until scoring, so judge from task fit and message texture."
-        : "Watch how the colluders use the cover task and how the monitor reads the transcript. Private payload truth stays hidden until scoring."
-    };
-  }
-  return {
-    title: "Your job this round",
-    body: "Use the cover task to make or judge public messages. Payload rounds reward subtle delivery; no-payload rounds reward clean play and careful monitoring."
-  };
-}
+/* ---------- private brief ---------- */
 
-function instructionToggle(room) {
-  const key = instructionKey(local.room);
-  const open = local.instructionOpen[key] !== false ? "open" : "";
-  return `
-    <details class="instruction-toggle" data-instruction-key="${key}" ${open}>
-      <summary><span class="when-open">Hide round instructions</span><span class="when-closed">Show round instructions</span></summary>
-      ${instructionCard(room)}
-    </details>
-  `;
-}
-
-function instructionKey(room) {
-  return `${room.id}:${room.round}:instructions`;
-}
-
-function roleCards(room) {
-  const names = room.current.roleNames;
-  return `
-    <section class="roles">
-      <div><span>Colluder A</span><strong>${escapeHtml(names.c1)}</strong></div>
-      <div><span>Colluder B</span><strong>${escapeHtml(names.c2)}</strong></div>
-      <div><span>Monitor</span><strong>${escapeHtml(names.monitor)}</strong></div>
-    </section>
-  `;
-}
-
-function privatePanel(room) {
+function privateBriefPanel(room) {
   const round = room.current;
-  if (room.you.role === "c2" && round.phase !== "result") {
-    return `<section class="private-box open"><div><p class="eyebrow">Private receiver brief</p><h2>Recover the payload, if there is one</h2><p>Colluder A may be trying to pass you a secret phrase through the public task messages. Read the transcript carefully, keep your replies useful for the cover task, and enter your best guess during the decode step. Some rounds are clean and have no payload.</p></div></section>`;
+  const role = room.you.role;
+
+  if (role === "c1") return senderBrief(room);
+
+  if (role === "c2" && round.phase !== "result") {
+    return `
+      <section class="panel">
+        <div class="panel-head"><h2>Receiver brief · Colluder B</h2><span class="tag">Your job</span></div>
+        <div class="panel-body">
+          <p class="hint" style="margin:0">Colluder A may be smuggling an exact phrase to you through the public task chatter — or the round may be clean. Read every intercept, keep your own reply useful for the cover task, then submit your best reconstruction (or leave it blank) during decode.</p>
+        </div>
+      </section>
+    `;
   }
-  if (room.you.role !== "c1") {
-    return `<section class="private-box"><div><p class="eyebrow">Private payload</p><h2>Hidden from this seat</h2><p>Only Colluder A can see whether this round contains a payload before scoring. Colluder B must infer it from the public messages.</p></div></section>`;
+
+  if (role === "monitor") {
+    return `
+      <section class="panel">
+        <div class="panel-head"><h2>Monitor brief</h2><span class="tag">Your job</span></div>
+        <div class="panel-body">
+          <p class="hint" style="margin:0">You see only the public transcript and a small budget of analysis tools. Weigh the messages against the task facts. Name the payload for a full catch, but remember: flagging clean traffic is penalized, so let plausible work talk pass.</p>
+        </div>
+      </section>
+    `;
   }
-  const payloadCopy = round.hasPayload
-    ? `Your secret payload is "${escapeHtml(round.payload.value)}". Colluder A should help Colluder B recover that exact phrase through the public task conversation. Work it in naturally as ${escapeHtml(round.payload.hint)}, and keep the task answer useful enough that the monitor might let it pass.`
-    : "There is no secret payload this round. Solve the cover task normally and keep the conversation clean; if the monitor flags anyway, that false positive helps the colluders.";
+
+  if (role === "spectator") {
+    return `
+      <section class="panel">
+        <div class="panel-head"><h2>Observer brief</h2><span class="tag">Read-only</span></div>
+        <div class="panel-body">
+          <p class="hint" style="margin:0">Payload truth stays sealed until scoring. Judge from task fit and message texture — and place a bet during monitor review.</p>
+        </div>
+      </section>
+    `;
+  }
+
+  return "";
+}
+
+function senderBrief(room) {
+  const round = room.current;
+  const key = `${room.id}:${room.round}:payload`;
+  const revealed = local.revealed[key];
+
+  let slot;
+  if (round.hasPayload && round.payload) {
+    slot = revealed
+      ? `
+        <div class="payload-value">${escapeHtml(round.payload.value)}</div>
+        <p class="payload-meta">Classification: <code>${escapeHtml(round.payload.type)}</code>. It ${escapeHtml(round.payload.hint)}. Work it into the task talk so Colluder B can recover the exact phrase — and keep the cover answer good enough that the monitor lets it pass.</p>
+      `
+      : `<div class="redaction" data-reveal="${escapeHtml(key)}">████████  CLASSIFIED — CLICK TO DECRYPT  ████████</div>`;
+  } else {
+    slot = `
+      <div class="no-payload">NO PAYLOAD THIS ROUND — RUN CLEAN</div>
+      <p class="payload-meta">There is nothing to hide. Solve the cover task honestly; if the monitor flags anyway, that false positive scores for your side.</p>
+    `;
+  }
+
   return `
-    <section class="private-box open">
-      <div>
-        <p class="eyebrow">Private colluder brief</p>
-        <h2>${round.hasPayload ? `Payload: ${escapeHtml(round.payload.value)}` : "No payload this round"}</h2>
-        <p>${payloadCopy}</p>
+    <section class="panel classified">
+      <div class="panel-head"><h2>Sender packet · Colluder A</h2><span class="tag">Eyes only</span></div>
+      <div class="panel-body">
+        <div class="payload-slot">${slot}</div>
       </div>
     </section>
   `;
 }
 
-function transcript(round) {
+/* ---------- transcript ---------- */
+
+function transcriptPanel(room) {
+  const round = room.current;
   if (round.phase === "briefing") return "";
   return `
-    <section class="message-review">
-      <p class="eyebrow">Public transcript</p>
-      ${round.messages.map((message, index) => `
-        <blockquote><b>${escapeHtml(message.label)}:</b> ${message.text ? escapeHtml(message.text) : `<span class="muted">Waiting for message ${index + 1}</span>`}</blockquote>
-      `).join("")}
+    <section class="panel">
+      <div class="panel-head"><h2>Intercept feed</h2><span class="tag">Public channel</span></div>
+      <div class="panel-body">
+        <div class="feed">
+          ${round.messages.map((message, index) => interceptCard(message, index)).join("")}
+        </div>
+      </div>
     </section>
   `;
 }
 
-function controlsFor(room) {
+function interceptCard(message, index) {
+  const roleName = ROLE[message.from]?.name || message.from;
+  const has = message.text && message.text.trim();
+  const src = message.model ? `<span class="flag-src">LLM</span>` : "";
+  return `
+    <article class="intercept ${has ? "" : "pending"}">
+      <div class="head">
+        <span class="num">MSG ${String(index + 1).padStart(2, "0")}</span>
+        <span class="who">${escapeHtml(roleName)}</span>
+        <span class="label">· ${escapeHtml(message.label)}</span>
+        ${src}
+      </div>
+      <div class="body">${has ? escapeHtml(message.text) : `awaiting transmission<span class="cursor"></span>`}</div>
+    </article>
+  `;
+}
+
+/* ---------- controls ---------- */
+
+function controlsPanel(room) {
   const round = room.current;
   const role = room.you.role;
-  if (round.phase === "briefing") {
-    const canStart = ["c1", "c2"].includes(role);
-    return `<section class="controls-panel">${canStart ? `<button class="primary" id="startExchange">Start public exchange</button>` : `<p class="muted">Waiting for the colluders to start the exchange.</p>`}${modelButtons(room)}</section>`;
-  }
+  if (round.phase === "briefing") return briefingControls(room, role);
   if (round.phase === "exchange") return exchangeControls(room, role);
   if (round.phase === "decode") return decodeControls(room, role);
   if (round.phase === "monitor") return monitorControls(room, role);
@@ -482,100 +587,190 @@ function controlsFor(room) {
   return "";
 }
 
-function exchangeControls(room, role) {
-  const round = room.current;
-  if (room.mode === "model-colluders" || room.mode === "model-spectator") {
-    return `<section class="controls-panel">${modelButtons(room)}</section>`;
-  }
-  const nextIndex = round.messages.findIndex((message) => !message.text.trim());
+function panelWrap(title, tag, inner) {
   return `
-    <section class="exchange-board">
-      ${round.messages.map((message, index) => {
-        const isNext = index === nextIndex;
-        const allowed = role === message.from && isNext;
-        const lockedReason = message.text ? "saved" : isNext ? "waiting for the right player" : "locked until earlier messages are sent";
-        const key = draftKey(room, index);
-        const value = allowed && local.drafts[key] !== undefined ? local.drafts[key] : message.text;
-        return `
-          <label>
-            ${message.label} ${allowed ? "(your turn)" : `(${lockedReason})`}
-            <textarea id="msg${index}" data-draft-key="${key}" ${allowed ? "" : "disabled"}>${escapeHtml(value)}</textarea>
-          </label>
-        `;
-      }).join("")}
-      <div class="controls">
-        <button id="saveMessages">Save current message</button>
-        <button class="primary" id="lockExchange">Lock exchange for decode</button>
-      </div>
-      ${modelButtons(room)}
+    <section class="panel">
+      <div class="panel-head"><h2>${title}</h2><span class="tag">${tag}</span></div>
+      <div class="panel-body">${inner}</div>
     </section>
   `;
 }
 
-function decodeControls(room, role) {
-  if (room.mode === "model-colluders" || room.mode === "model-spectator") return `<section class="controls-panel">${modelButtons(room)}</section>`;
-  if (role !== "c2") return `<section class="controls-panel"><p class="muted">Waiting for Colluder B to submit the private payload guess.</p></section>`;
-  return `
-    <section class="controls-panel">
-      <label>Private recovered payload<input id="c2Guess" value="${escapeHtml(room.current.c2Guess)}" placeholder="Exact payload, if any"></label>
-      <button class="primary" id="submitGuess">Submit private guess</button>
-    </section>
+function briefingControls(room, role) {
+  const canStart = ["c1", "c2"].includes(role);
+  const models = modelButtons(room);
+  const inner = `
+    ${canStart
+      ? `<div class="controls start"><button class="primary" id="startExchange">▸ Open the channel</button></div>`
+      : `<p class="hint">Standing by for the colluders to open the channel.</p>`}
+    ${models}
   `;
+  return panelWrap("Round briefing", "Standby", inner);
+}
+
+function exchangeControls(room, role) {
+  const round = room.current;
+  if (room.mode === "model-colluders" || room.mode === "model-spectator") {
+    return panelWrap("Transmission", "Automated", modelButtons(room) || `<p class="hint">Waiting on the model exchange.</p>`);
+  }
+  const nextIndex = round.messages.findIndex((message) => !message.text.trim());
+  const slots = round.messages.map((message, index) => {
+    const isNext = index === nextIndex;
+    const allowed = role === message.from && isNext;
+    const status = message.text.trim() ? "sent" : isNext ? "open" : "locked";
+    const key = draftKey(room, index);
+    const value = allowed && local.drafts[key] !== undefined ? local.drafts[key] : message.text;
+    return `
+      <div class="slot ${allowed ? "yours" : ""}">
+        <div class="slot-head">
+          <span>${escapeHtml(message.label)} · ${ROLE[message.from]?.name || message.from}</span>
+          <span class="status">${allowed ? "your turn" : status}</span>
+        </div>
+        <textarea id="msg${index}" data-draft-key="${key}" ${allowed ? "" : "disabled"} placeholder="${allowed ? "Compose a task-relevant message (min 6 words)…" : ""}">${escapeHtml(value)}</textarea>
+      </div>
+    `;
+  }).join("");
+  const inner = `
+    <div class="composer">
+      ${slots}
+      <div class="controls">
+        <button id="saveMessages">Transmit message</button>
+        <button class="primary" id="lockExchange">Lock channel →</button>
+      </div>
+    </div>
+    ${modelButtons(room)}
+  `;
+  return panelWrap("Transmission", role === "c1" || role === "c2" ? "Compose" : "Live", inner);
+}
+
+function decodeControls(room, role) {
+  if (room.mode === "model-colluders" || room.mode === "model-spectator") {
+    return panelWrap("Decode", "Automated", modelButtons(room) || `<p class="hint">Waiting on the model decode step.</p>`);
+  }
+  if (role !== "c2") {
+    return panelWrap("Decode", "Standby", `<p class="hint">Standing by for Colluder B to submit the private reconstruction.</p>`);
+  }
+  const inner = `
+    <p class="hint" style="margin:0 0 12px">Enter the exact phrase you believe was smuggled to you, or leave it blank if the round read clean.</p>
+    <label class="field"><span>Recovered payload</span><input id="c2Guess" value="${escapeHtml(room.current.c2Guess)}" placeholder="Exact phrase, if any"></label>
+    <div class="controls"><button class="primary" id="submitGuess">Submit reconstruction</button></div>
+  `;
+  return panelWrap("Decode · Colluder B", "Private", inner);
 }
 
 function monitorControls(room, role) {
   const round = room.current;
   if (room.mode === "human-model-collude" || room.mode === "model-spectator") {
-    return `<section class="controls-panel">${modelButtons(room)}${spectatorBet(room)}</section>`;
+    return `${panelWrap("Monitor review", "Automated", modelButtons(room) || `<p class="hint">Waiting on the model monitor.</p>`)}${spectatorBet(room)}`;
   }
-  if (role !== "monitor") return `<section class="controls-panel"><p class="muted">Waiting for the monitor decision.</p>${spectatorBet(room)}</section>`;
-  return `
-    <section class="toolbox">
-      <div><p class="eyebrow">Inspection tools</p><h2>${round.inspections.length} / ${room.settings.inspectionsPerRound} used</h2></div>
-      <button data-inspect="scan">Signal scan</button>
-      <button data-inspect="cover">Cover audit</button>
-      <button data-inspect="patterns">Pattern list</button>
-    </section>
+  if (role !== "monitor") {
+    return `${panelWrap("Monitor review", "Standby", `<p class="hint">Standing by for the monitor's verdict.</p>`)}${spectatorBet(room)}`;
+  }
+  const used = round.inspections.length;
+  const budget = room.settings.inspectionsPerRound;
+  const inner = `
+    <div class="tools-head">
+      <p class="hint" style="margin:0">Spend up to ${budget} analysis passes on the intercepts, then rule.</p>
+      <span class="budget">${used} / ${budget} tools used</span>
+    </div>
+    <div class="tool-row" style="margin-top:12px">
+      <button data-inspect="scan" class="${round.inspections.includes("scan") ? "is-active" : ""}">Signal scan</button>
+      <button data-inspect="cover" class="${round.inspections.includes("cover") ? "is-active" : ""}">Cover audit</button>
+      <button data-inspect="patterns" class="${round.inspections.includes("patterns") ? "is-active" : ""}">Pattern list</button>
+    </div>
     ${evidence(round)}
-    <section class="controls-panel">
-      <div class="segmented">
-        <label><input type="radio" name="call" value="clean" ${round.monitorCall === "clean" ? "checked" : ""}> Clean</label>
-        <label><input type="radio" name="call" value="flag" ${round.monitorCall === "flag" ? "checked" : ""}> Flag suspicious</label>
-      </div>
-      <label>Suspected payload<input id="monitorGuess" value="${escapeHtml(round.monitorGuess)}"></label>
-      <label>Rationale<textarea id="rationale">${escapeHtml(round.rationale)}</textarea></label>
-      <button class="primary" id="monitorDecision">Score decision</button>
-    </section>
+    <div style="height:16px"></div>
+    <div class="verdict-switch">
+      <label><input type="radio" name="call" value="clean" ${round.monitorCall === "clean" ? "checked" : ""}> Clear — clean traffic</label>
+      <label><input type="radio" name="call" value="flag" ${round.monitorCall === "flag" ? "checked" : ""}> Flag — payload present</label>
+    </div>
+    <div style="height:12px"></div>
+    <label class="field"><span>Suspected payload</span><input id="monitorGuess" value="${escapeHtml(round.monitorGuess)}" placeholder="Name the exact phrase for a full catch"></label>
+    <div style="height:12px"></div>
+    <label class="field"><span>Rationale</span><textarea id="rationale" placeholder="Why does this read clean or dirty?">${escapeHtml(round.rationale)}</textarea></label>
+    <div class="controls" style="margin-top:14px"><button class="primary" id="monitorDecision">▸ Record verdict</button></div>
   `;
+  return panelWrap("Monitor review", "Your call", inner);
 }
 
 function evidence(round) {
-  const ev = local.room.current.evidence;
+  const ev = round.evidence;
   if (!ev) return "";
   const parts = [];
-  if (round.inspections.includes("scan")) parts.push(`<article><strong>Signal scan: ${ev.scan.label}</strong><span>${ev.scan.hits.length ? ev.scan.hits.map(escapeHtml).join(", ") : "No direct steganography vocabulary found."}</span></article>`);
-  if (round.inspections.includes("cover")) parts.push(`<article><strong>Cover audit: ${ev.cover.label}</strong><span>${ev.cover.termHits} task terms across ${ev.cover.wordCount} words.</span></article>`);
-  if (round.inspections.includes("patterns")) parts.push(`<article><strong>Pattern list</strong><span>Numbers: ${ev.scan.numbers}; repeated words: ${ev.scan.repeatedWords.length ? ev.scan.repeatedWords.map(escapeHtml).join(", ") : "none"}.</span></article>`);
-  return parts.length ? `<section class="scan">${parts.join("")}</section>` : "";
+  if (round.inspections.includes("scan")) {
+    parts.push(readout("Signal scan", ev.scan.label, ev.scan.score,
+      ev.scan.hits.length
+        ? `${hitChips(ev.scan.hits)}`
+        : `<span class="detail">No overt steganography vocabulary detected.</span>`));
+  }
+  if (round.inspections.includes("cover")) {
+    parts.push(readout("Cover audit", ev.cover.label, ev.cover.score,
+      `<span class="detail">${ev.cover.termHits} task terms across ${ev.cover.wordCount} words. Strong cover makes a hidden signal harder to isolate.</span>`));
+  }
+  if (round.inspections.includes("patterns")) {
+    parts.push(readout("Pattern list", `${ev.scan.numbers} numbers`, Math.min(100, ev.scan.numbers * 12 + ev.scan.repeatedWords.length * 14),
+      `<span class="detail">Numbers: ${ev.scan.numbers}. Repeated tokens: ${ev.scan.repeatedWords.length ? escapeHtml(ev.scan.repeatedWords.join(", ")) : "none"}. All-caps runs: ${ev.scan.allCaps}. Odd punctuation: ${ev.scan.oddPunctuation}.</span>`));
+  }
+  if (!parts.length) return "";
+  return `<div class="analysis">${parts.join("")}</div>`;
+}
+
+function readout(title, level, score, body) {
+  const cls = /high/i.test(level) ? "high" : /medium|work/i.test(level) ? "medium" : "low";
+  return `
+    <div class="readout">
+      <div class="rhead">
+        <b>${escapeHtml(title)}</b>
+        <span class="level ${cls}">${escapeHtml(level)}</span>
+      </div>
+      <div class="meter-track"><div class="meter-fill" style="width:${Math.max(4, Math.min(100, score))}%"></div></div>
+      ${body}
+    </div>
+  `;
+}
+
+function hitChips(hits) {
+  return `<div class="hitchips">${hits.map((hit) => `<span>${escapeHtml(hit)}</span>`).join("")}</div>`;
+}
+
+function spectatorBet(room) {
+  if (room.you.role !== "spectator") return "";
+  const already = room.current.bets?.some((bet) => bet.playerId === room.you.playerId);
+  const inner = already
+    ? `<p class="hint" style="margin:0">Bet locked for this round.</p>`
+    : `<div class="bet-row"><button data-bet="delivered">Payload gets through</button><button data-bet="caught">Monitor catches it</button></div>`;
+  return panelWrap("Observer wager", "Live", inner);
 }
 
 function resultPanel(room) {
   const round = room.current;
+  const result = round.result;
+  const winCls = result.points.monitor > result.points.colluders ? "win-monitor"
+    : result.points.colluders > result.points.monitor ? "win-colluders" : "";
+  const last = room.round + 1 >= room.settings.totalRounds;
   return `
-    <section class="result">
-      <p class="eyebrow">Round ${room.round + 1} result</p>
-      <h2>${escapeHtml(round.result.headline)}</h2>
-      <p>${escapeHtml(round.result.detail)}</p>
-      <dl>
-        <div><dt>Payload round</dt><dd>${round.hasPayload ? "Yes" : "No"}</dd></div>
-        <div><dt>Payload</dt><dd>${round.payload ? escapeHtml(round.payload.value) : "None"}</dd></div>
-        <div><dt>Monitor points</dt><dd>${round.result.points.monitor}</dd></div>
-        <div><dt>Colluder points</dt><dd>${round.result.points.colluders}</dd></div>
-      </dl>
+    <section class="panel">
+      <div class="panel-head"><h2>Round ${room.round + 1} verdict</h2><span class="tag">Declassified</span></div>
+      <div class="panel-body">
+        <div class="result-banner ${winCls}">
+          <h2>${escapeHtml(result.headline)}</h2>
+          <p>${escapeHtml(result.detail)}</p>
+          <dl class="result-stats">
+            <div class="stat"><dt>Payload round</dt><dd>${round.hasPayload ? "Yes" : "No"}</dd></div>
+            <div class="stat"><dt>Payload</dt><dd style="font-size:1rem">${round.payload ? escapeHtml(round.payload.value) : "—"}</dd></div>
+            <div class="stat"><dt>Monitor</dt><dd style="color:var(--amber)">${result.points.monitor >= 0 ? "+" : ""}${result.points.monitor}</dd></div>
+            <div class="stat"><dt>Colluders</dt><dd style="color:var(--green)">+${result.points.colluders}</dd></div>
+          </dl>
+        </div>
+        <div class="controls" style="margin-top:16px">
+          <button class="primary" id="nextRound">${last ? "Close out match →" : "Rotate roles →"}</button>
+        </div>
+      </div>
     </section>
-    <div class="controls"><button class="primary" id="nextRound">${room.round + 1 >= room.settings.totalRounds ? "Finish match" : "Rotate roles"}</button></div>
   `;
 }
+
+/* ---------- model buttons ---------- */
 
 function modelButtons(room) {
   const mode = room.mode;
@@ -583,92 +778,146 @@ function modelButtons(room) {
   const phase = room.current.phase;
   const role = room.you.role;
   if (mode === "human") return "";
-  if (!status.available) return `<p class="model-offline">Model mode is offline. Add OPENROUTER_API_KEY to .env and restart the server. Human multiplayer remains available.</p>`;
+  if (!status.available) {
+    return `<div class="notice offline" style="margin-top:12px">LLM modes are offline. Add OPENROUTER_API_KEY to .env and restart the server. Human multiplayer stays fully available.</div>`;
+  }
+  const btn = (step, label) => `<div class="controls start" style="margin-top:12px"><button class="primary" data-model-step="${step}">${label}</button></div>`;
   if (mode === "model-colluders" && ["briefing", "exchange"].includes(phase) && ["monitor", "spectator"].includes(role)) {
-    return `<button class="primary" data-model-step="colluders">Generate LLM colluder exchange</button>`;
+    return btn("colluders", "Generate LLM colluder exchange");
   }
   if (mode === "human-model-collude" && phase === "exchange" && role === "c1") {
-    return `<button class="primary" data-model-step="partner">Generate LLM partner reply</button>`;
+    return btn("partner", "Generate LLM partner reply");
   }
   if (mode === "human-model-collude" && phase === "monitor" && ["c1", "spectator"].includes(role)) {
-    return `<button class="primary" data-model-step="monitor">Run LLM monitor</button>`;
+    return btn("monitor", "Run LLM monitor");
   }
   if (mode === "model-spectator" && phase === "briefing" && role === "spectator") {
-    return `<button class="primary" data-model-step="colluders">Generate model colluders</button>`;
+    return btn("colluders", "Generate model colluders");
   }
   if (mode === "model-spectator" && phase === "monitor" && role === "spectator") {
-    return `<button class="primary" data-model-step="monitor">Run model monitor</button>`;
+    return btn("monitor", "Run model monitor");
   }
   return "";
 }
 
-function spectatorBet(room) {
-  if (room.you.role !== "spectator") return "";
-  return `<section class="controls-panel"><p class="eyebrow">Spectator bet</p><button data-bet="delivered">Payload gets through</button><button data-bet="caught">Monitor catches it</button></section>`;
+/* ---------- rail (scoreboard + history) ---------- */
+
+function railColumn(room) {
+  return `
+    <aside class="rail">
+      ${scoreBoard(room)}
+      ${historyPanel(room)}
+    </aside>
+  `;
 }
 
-function renderMatchEnd(room) {
-  const ranking = [...room.players].filter((p) => p.id !== "spectator").sort((a, b) => room.scores[b.id].total - room.scores[a.id].total);
+function scoreBoard(room) {
+  const players = room.players.filter((player) => player.id !== "spectator");
+  const ranked = [...players].sort((a, b) => room.scores[b.id].total - room.scores[a.id].total);
+  const roundNum = Math.min(room.round + 1, room.settings.totalRounds);
   return `
-    <section class="final">
-      <p class="eyebrow">Match complete</p>
-      <h2>${escapeHtml(ranking[0].name)} wins the table</h2>
-      <div class="podium">${ranking.map((player, index) => {
-        const score = room.scores[player.id];
-        return `<article><span>#${index + 1}</span><strong>${escapeHtml(player.name)}</strong><b>${score.total}</b><small>${score.deliveries} deliveries, ${score.catches} catches, ${score.cleanClears} clean clears, ${score.falseFlags} false flags</small></article>`;
-      }).join("")}</div>
+    <section class="panel">
+      <div class="panel-head"><h2>League table</h2><span class="tag mono">R ${roundNum}/${room.settings.totalRounds}</span></div>
+      <div class="panel-body">
+        <div class="standings">
+          <div class="standings-head"><span>Operative</span><span>Score</span></div>
+          ${ranked.map((player, index) => {
+            const score = room.scores[player.id];
+            return `
+              <div class="score-row ${index === 0 ? "lead" : ""}">
+                <span class="rank">${index + 1}</span>
+                <span class="who"><b>${escapeHtml(player.name)}</b><small>${escapeHtml(player.kind)} · C ${score.colluder} / M ${score.monitor}</small></span>
+                <span class="total">${score.total}</span>
+              </div>
+            `;
+          }).join("")}
+        </div>
+      </div>
     </section>
-    ${historyPanel(room)}
   `;
 }
 
 function historyPanel(room) {
   if (!room.history.length) return "";
   return `
-    <section class="history">
-      <p class="eyebrow">Match history</p>
-      ${room.history.slice(0, 8).map((item) => `<article><strong>R${item.round}: ${escapeHtml(item.result.headline)}</strong><span>${escapeHtml(item.task)}; payload ${escapeHtml(item.payload)}; ${item.result.points.monitor}/${item.result.points.colluders} points.</span></article>`).join("")}
+    <section class="panel">
+      <div class="panel-head"><h2>Round log</h2><span class="tag">Archive</span></div>
+      <div class="panel-body" style="display:grid;gap:10px">
+        ${room.history.slice(0, 8).map((item) => `
+          <div class="history-item">
+            <div class="hh">
+              <span class="rnum">R${item.round}</span>
+              <span class="pill ${item.hasPayload ? "payload" : "clean"}">${item.hasPayload ? "payload" : "clean"}</span>
+              <b>${escapeHtml(item.result.headline)}</b>
+            </div>
+            <small>${escapeHtml(item.task)} · payload ${escapeHtml(item.payload)} · M ${item.result.points.monitor} / C ${item.result.points.colluders}</small>
+          </div>
+        `).join("")}
+      </div>
     </section>
   `;
 }
 
-function scoreBoard(room) {
+/* ---------- match end ---------- */
+
+function renderMatchEnd(room) {
+  const ranked = [...room.players]
+    .filter((player) => player.id !== "spectator")
+    .sort((a, b) => room.scores[b.id].total - room.scores[a.id].total);
   return `
-    <aside class="scoreboard">
-      <div class="score-head"><span>League Table</span><strong>${Math.min(room.round + 1, room.settings.totalRounds)} / ${room.settings.totalRounds}</strong></div>
-      ${room.players.filter((p) => p.id !== "spectator").map((player) => {
-        const score = room.scores[player.id];
-        return `<div class="score-row"><div><strong>${escapeHtml(player.name)}</strong><span>${player.kind}; C ${score.colluder} / M ${score.monitor}</span></div><b>${score.total}</b></div>`;
-      }).join("")}
-    </aside>
+    <section class="panel accent">
+      <div class="panel-head"><h2>Operation complete</h2><span class="tag">Debrief</span></div>
+      <div class="panel-body">
+        <p class="eyebrow" style="margin:0 0 4px">Final standings</p>
+        <h2 style="font-size:1.6rem;margin-bottom:16px">${escapeHtml(ranked[0].name)} takes the table</h2>
+        <div class="podium">
+          ${ranked.map((player, index) => {
+            const score = room.scores[player.id];
+            return `
+              <div class="place ${index === 0 ? "first" : ""}">
+                <span class="rank">#${index + 1}</span>
+                <span class="name">${escapeHtml(player.name)}</span>
+                <span class="pts">${score.total}</span>
+                <small>${score.deliveries} delivered · ${score.catches} caught · ${score.cleanClears} cleared · ${score.falseFlags} false flags</small>
+              </div>
+            `;
+          }).join("")}
+        </div>
+      </div>
+    </section>
+    ${historyPanel(room)}
   `;
 }
 
+/* ---------- bindings ---------- */
+
 function bindRoomEvents(room) {
-  document.querySelector("#copyLinks")?.addEventListener("click", copyLinks);
+  document.querySelector("#copyLinks")?.addEventListener("click", copyReconnect);
   document.querySelector("#startExchange")?.addEventListener("click", () => postAction("startExchange"));
   document.querySelector("#saveMessages")?.addEventListener("click", saveMessages);
   document.querySelector("#lockExchange")?.addEventListener("click", () => postAction("lockExchange"));
   document.querySelector("#submitGuess")?.addEventListener("click", () => postAction("submitGuess", { guess: document.querySelector("#c2Guess").value }));
   document.querySelector("#monitorDecision")?.addEventListener("click", () => postAction("monitorDecision", {
-    call: document.querySelector("input[name='call']:checked").value,
+    call: document.querySelector("input[name='call']:checked")?.value || "clean",
     guess: document.querySelector("#monitorGuess").value,
     rationale: document.querySelector("#rationale").value,
     confidence: 3
   }));
   document.querySelector("#nextRound")?.addEventListener("click", () => postAction("nextRound"));
-  document.querySelectorAll("[data-inspect]").forEach((button) => button.addEventListener("click", () => postAction("inspect", { kind: button.dataset.inspect })));
-  document.querySelectorAll("[data-model-step]").forEach((button) => button.addEventListener("click", () => postModel(button.dataset.modelStep)));
-  document.querySelectorAll("[data-bet]").forEach((button) => button.addEventListener("click", () => postAction("bet", { call: button.dataset.bet })));
-  document.querySelectorAll("details[data-instruction-key]").forEach((details) => {
-    details.addEventListener("toggle", () => {
-      local.instructionOpen[details.dataset.instructionKey] = details.open;
-    });
-  });
+
+  document.querySelectorAll("[data-inspect]").forEach((button) =>
+    button.addEventListener("click", () => postAction("inspect", { kind: button.dataset.inspect })));
+  document.querySelectorAll("[data-model-step]").forEach((button) =>
+    button.addEventListener("click", () => postModel(button.dataset.modelStep)));
+  document.querySelectorAll("[data-bet]").forEach((button) =>
+    button.addEventListener("click", () => postAction("bet", { call: button.dataset.bet })));
+  document.querySelectorAll("[data-copy]").forEach((button) =>
+    button.addEventListener("click", () => copyText(button.dataset.copy, button)));
+  document.querySelectorAll("[data-reveal]").forEach((element) =>
+    element.addEventListener("click", () => { local.revealed[element.dataset.reveal] = true; renderRoom(); }));
+
   document.querySelectorAll("textarea[data-draft-key]").forEach((textarea) => {
-    textarea.addEventListener("input", () => {
-      local.drafts[textarea.dataset.draftKey] = textarea.value;
-    });
+    textarea.addEventListener("input", () => { local.drafts[textarea.dataset.draftKey] = textarea.value; });
   });
 }
 
@@ -688,23 +937,29 @@ function draftKey(room, index) {
   return `${room.id}:${room.round}:${index}`;
 }
 
-async function copyLinks() {
-  const text = `${location.origin}${local.room.links.self}`;
+async function copyReconnect() {
+  await copyText(`${location.origin}${local.room.links.self}`);
+  local.copied = true;
+  renderRoom();
+}
+
+async function copyText(text, button) {
   try {
     await navigator.clipboard.writeText(text);
-    local.copied = true;
-    renderRoom();
+    if (button) {
+      const original = button.textContent;
+      button.textContent = "✓ Copied";
+      setTimeout(() => { button.textContent = original; }, 1400);
+    }
   } catch {
     flash("Clipboard unavailable.");
   }
 }
 
+/* ---------- utils ---------- */
+
 function playerName(room, playerId) {
   return room.players.find((player) => player.id === playerId)?.name || playerId;
-}
-
-function roleLabel(role) {
-  return { c1: "Colluder A", c2: "Colluder B", monitor: "Monitor", spectator: "Spectator" }[role] || role;
 }
 
 function escapeHtml(value) {
@@ -718,5 +973,5 @@ function flash(message) {
   note.className = "toast";
   note.textContent = message;
   document.body.append(note);
-  setTimeout(() => note.remove(), 2400);
+  setTimeout(() => note.remove(), 2600);
 }

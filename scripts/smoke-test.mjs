@@ -24,24 +24,23 @@ const css = await readFile(new URL("../src/styles.css", import.meta.url), "utf8"
 const server = await readFile(new URL("../server.js", import.meta.url), "utf8");
 
 for (const phrase of [
-  "Create multiplayer room",
-  "How it plays",
-  "Show round instructions",
-  "Hide round instructions",
-  "Your job as Colluder A",
-  "Your job as Colluder B",
-  "Your job as Monitor",
+  "Initiate operation",
+  "Field manual",
+  "Intercept feed",
+  "Sender packet",
+  "Receiver brief",
+  "Monitor brief",
   "route-diagram",
   "aria-label",
   "Copy reconnect link",
-  "Model mode is offline",
+  "LLM modes are offline",
   "Generate LLM colluder exchange",
-  "Spectator bet"
+  "Observer wager"
 ]) {
   assert.ok(app.includes(phrase), `Missing UI phrase: ${phrase}`);
 }
 
-for (const selector of [".hero-band", ".task-panel", ".scoreboard", ".phase-line", ".toolbox", ".link-grid"]) {
+for (const selector of [".masthead", ".cover-task", ".signal-path", ".intercept", ".invite-grid", ".classified"]) {
   assert.ok(css.includes(selector), `Missing CSS selector: ${selector}`);
 }
 
@@ -67,10 +66,11 @@ assert.ok(colluderView.current.payload.value, "colluder should see payload value
 assert.equal(receiverView.you.role, "c2");
 assert.equal(receiverView.current.hasPayload, null, "Colluder B must not see payload truth before scoring");
 assert.equal(receiverView.current.payload, null, "Colluder B must not see payload value before scoring");
-assert.equal(app.includes("${escapeHtml(round.payload.type)}. ${escapeHtml(round.payload.hint)} Strategy"), false, "private payload copy should not expose raw metadata fragments");
-assert.equal(app.includes("task.constraints.map"), false, "shared round instructions should not render colluder-directed constraint chips");
-assert.ok(app.includes("function coverTaskCard"), "cover task should render as a separate section");
-assert.ok(app.includes("${coverTaskCard(room)}"), "cover task should stay outside the hideable instructions toggle");
+assert.equal(app.includes("task.constraints"), false, "shared UI should not render colluder-directed task constraints");
+assert.ok(app.includes("function senderBrief"), "the private payload must render through a dedicated sender-only panel");
+assert.ok(app.includes('if (role === "c1") return senderBrief(room)'), "the payload packet must be gated behind the Colluder A role");
+assert.ok(app.includes("function coverTaskPanel"), "cover task should render as a separate public section");
+assert.ok(app.includes("${coverTaskPanel(room)}"), "cover task should render for every seat, independent of private briefs");
 
 const samplePlayers = [
   { id: "p0", name: "Ari", kind: "human" },
