@@ -2,6 +2,10 @@
 
 A local multiplayer game about steganographic coordination through monitored communication.
 
+## Interface
+
+The client is a signals-intelligence "intercept console": a dark, monospace-accented dossier with a classification banner, a five-node signal path tracking the round phase (Brief → Transmit → Decode → Review → Verdict), and the public transcript rendered as numbered intercept cards. Colluder A's payload arrives as a redacted eyes-only packet that must be clicked to decrypt, the monitor's inspection tools render as meter readouts with suspicious-term chips, and the league table plus round log live in a sticky rail. The UI is dark-mode native and responsive; all privacy boundaries (who sees payload truth, guesses, and verdicts, and when) are enforced by the server, never the client.
+
 ## Run
 
 ```bash
