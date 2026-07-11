@@ -1,46 +1,22 @@
-import { openRouterConfig } from "./model-config.js";
+const openRouterEndpoint = "https://openrouter.ai/api/v1/chat/completions";
+const defaultTimeoutMs = 12000;
 
-export function parseEnv(text) {
-  const env = {};
-  for (const line of String(text || "").split(/\r?\n/)) {
-    const trimmed = line.trim();
-    if (!trimmed || trimmed.startsWith("#")) continue;
-    const match = trimmed.match(/^([A-Za-z_][A-Za-z0-9_]*)=(.*)$/);
-    if (!match) continue;
-    env[match[1]] = match[2].replace(/^["']|["']$/g, "");
-  }
-  return env;
-}
-
-export function configFromEnv(env = {}, baseConfig = openRouterConfig) {
-  const modelList = String(env.OPENROUTER_MODELS || "").split(",").map((model) => model.trim()).filter(Boolean);
-  if (modelList.length < 2 || modelList.some((model) => !model.endsWith(":free"))) {
-    return baseConfig;
-  }
-
-  return {
-    ...baseConfig,
-    freeModels: {
-      colluder: modelList[0],
-      monitor: modelList[1]
-    }
-  };
-}
-
-export function createModelClient({ apiKey, fetchFn = fetch, config = openRouterConfig } = {}) {
+export function createModelClient({ apiKey, fetchFn = fetch, endpoint = openRouterEndpoint, timeoutMs = defaultTimeoutMs } = {}) {
   const available = Boolean(apiKey);
 
-  async function complete({ role, prompt, timeoutMs = config.timeoutMs }) {
+  async function complete({ model, prompt, timeoutMs: requestTimeoutMs = timeoutMs }) {
     if (!available) {
       return { ok: false, unavailable: true, reason: "OPENROUTER_API_KEY is not configured." };
     }
+    if (!model) {
+      return { ok: false, reason: "No OpenRouter model was selected." };
+    }
 
-    const model = role === "monitor" ? config.freeModels.monitor : config.freeModels.colluder;
     const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), timeoutMs);
+    const timer = setTimeout(() => controller.abort(), requestTimeoutMs);
 
     try {
-      const response = await fetchFn(config.endpoint, {
+      const response = await fetchFn(endpoint, {
         method: "POST",
         signal: controller.signal,
         headers: {
@@ -82,10 +58,8 @@ export function createModelClient({ apiKey, fetchFn = fetch, config = openRouter
   return {
     available,
     config: {
-      provider: config.provider,
-      freeModels: config.freeModels,
-      publicModelSource: config.publicModelSource,
-      timeoutMs: config.timeoutMs
+      provider: "openrouter",
+      timeoutMs
     },
     complete
   };

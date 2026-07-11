@@ -1,8 +1,9 @@
 import { readFile } from "node:fs/promises";
 import assert from "node:assert/strict";
-import { configFromEnv, createModelClient } from "../src/model-adapter.js";
+import { selectModel } from "../../server/lib/openrouter-models.mjs";
+import { createModelClient } from "../src/model-adapter.js";
 import { createRound } from "../src/game-core.js";
-import { authorizeModelStep, createRoom, applyAction, sanitizeRoom } from "../src/server-game.js";
+import { authorizeModelStep, createRoom, applyAction, runModelStep, sanitizeRoom } from "../src/server-game.js";
 
 const files = [
   "index.html",
@@ -47,6 +48,11 @@ for (const selector of [".masthead", ".cover-task", ".signal-path", ".intercept"
 for (const route of ["/api/config", "/api/rooms", "/action", "/model"]) {
   assert.ok(server.includes(route), `Missing server route: ${route}`);
 }
+assert.ok(server.includes("../server/lib/openrouter-models.mjs"), "server should use the workspace model registry");
+assert.ok(server.includes("selectModel(await getModelCatalog(), body.model)"), "server should validate the client model selection");
+assert.equal(server.includes(["OPENROUTER", "MODELS"].join("_")), false, "legacy per-game model env configuration should be removed");
+assert.equal(server.includes("/refresh"), false, "the game must not expose a browser model-refresh route");
+assert.ok(app.includes("model: local.selectedModel"), "model actions should send the client selection");
 
 const isolatedA = createRoom({ payloadChance: 100 });
 const isolatedB = createRoom({ payloadChance: 100 });
@@ -130,13 +136,41 @@ const timeoutClient = createModelClient({
     });
   })
 });
-const timeoutResult = await timeoutClient.complete({ role: "monitor", prompt: "test", timeoutMs: 5 });
+const timeoutResult = await timeoutClient.complete({ model: "example/model:free", prompt: "test", timeoutMs: 5 });
 assert.equal(timeoutResult.timeout, true, "adapter should report timeouts without exposing secrets");
 
-const overriddenConfig = configFromEnv({ OPENROUTER_MODELS: "cohere/north-mini-code:free,nvidia/nemotron-3-ultra-550b-a55b:free" });
-assert.equal(overriddenConfig.freeModels.colluder, "cohere/north-mini-code:free");
-assert.equal(overriddenConfig.freeModels.monitor, "nvidia/nemotron-3-ultra-550b-a55b:free");
-const rejectedConfig = configFromEnv({ OPENROUTER_MODELS: "paid/provider-model,cohere/north-mini-code:free" });
-assert.equal(rejectedConfig.freeModels.colluder, "cohere/north-mini-code:free", "non-free env model values should be ignored");
+let submittedModel = "";
+const requestClient = createModelClient({
+  apiKey: "test-key",
+  fetchFn: async (_url, options) => {
+    submittedModel = JSON.parse(options.body).model;
+    return { ok: true, json: async () => ({ choices: [{ message: { content: "Selected model response" } }] }) };
+  }
+});
+const requestResult = await requestClient.complete({ model: "example/paid-model", prompt: "test" });
+assert.equal(requestResult.ok, true);
+assert.equal(submittedModel, "example/paid-model", "OpenRouter request body should use the validated client selection");
 
-console.log("Smoke test passed: multiplayer rooms, privacy, scoring, and model fallback behavior are covered.");
+const sampleCatalog = {
+  defaultModel: "example/default:free",
+  models: [{ id: "example/default:free" }, { id: "example/paid-model" }]
+};
+assert.equal(selectModel(sampleCatalog, "example/paid-model"), "example/paid-model");
+assert.throws(() => selectModel(sampleCatalog, "example/not-allowed"), /not in the server model catalog/);
+
+const selectedModels = [];
+const selectedRoom = createRoom({ mode: "model-colluders", payloadChance: 100 });
+await runModelStep(selectedRoom, {
+  available: true,
+  async complete(request) {
+    selectedModels.push(request.model);
+    return { ok: true, model: request.model, text: "A grounded task response with enough ordinary planning detail." };
+  }
+}, "colluders", "example/selected-model:free");
+assert.deepEqual(selectedModels, [
+  "example/selected-model:free",
+  "example/selected-model:free",
+  "example/selected-model:free"
+], "every call in a model step should use the user's validated selection");
+
+console.log("Smoke test passed: multiplayer rooms, privacy, scoring, and selected-model behavior are covered.");

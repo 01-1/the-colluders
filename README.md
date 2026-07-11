@@ -35,16 +35,15 @@ Model modes are first-class room modes:
 - Human + LLM colluder vs LLM monitor. The human is Colluder A, the LLM partner is Colluder B, and the LLM monitor reviews the exchange.
 - Model vs model spectator/eval with spectator betting.
 
-Model calls use OpenRouter only when `OPENROUTER_API_KEY` is exported in the server environment or present in the game-local `.env` file:
+Model calls use OpenRouter only when `OPENROUTER_API_KEY` is exported in the server environment or present in the workspace-root `.env` file (`../.env`):
 
 ```text
 OPENROUTER_API_KEY=...
-OPENROUTER_MODELS=cohere/north-mini-code:free,nvidia/nemotron-3-ultra-550b-a55b:free
 ```
 
-If no key is present, model rooms stay visible but show an offline state. Human multiplayer remains fully playable. Keep real keys out of git; `.env` is ignored by this repository. `OPENROUTER_MODELS` is optional and must contain free OpenRouter model IDs; invalid or non-free values are ignored in favor of the checked-in defaults.
+If no key is present, model rooms stay visible but show an offline state. Human multiplayer remains fully playable. Keep real keys out of git.
 
-Model configuration lives in [src/model-config.js](/i/code/games/the-colluders/src/model-config.js), so future paid model IDs can be added without touching room or scoring logic. Do not commit `.env` or room persistence files.
+The shared [openrouter-models.config.json](/i/code/games/openrouter-models.config.json) controls the free-model refresh interval, fallback free models, paid models, and default model. The lobby and model controls expose that allowed catalog for client-side selection, while the server validates every selection before making a model call. Run `npm run models:refresh` from the workspace root to refresh the free-model cache manually; no browser-accessible refresh endpoint exists. Do not commit `.env` or room persistence files.
 
 ## Scoring
 

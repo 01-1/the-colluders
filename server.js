@@ -1,12 +1,12 @@
 import { createServer } from "node:http";
 import { readFile, mkdir, writeFile } from "node:fs/promises";
 import { extname, join, normalize } from "node:path";
-import { configFromEnv, createModelClient, parseEnv } from "./src/model-adapter.js";
+import { getModelCatalog, getOpenRouterApiKey, selectModel } from "../server/lib/openrouter-models.mjs";
+import { createModelClient } from "./src/model-adapter.js";
 import { modeCatalog } from "./src/game-core.js";
 import { applyAction, authorizeModelStep, claimInvite, createRoom, dumpRooms, inviteLinks, loadRooms, runModelStep, sanitizeRoom, tokenPlayerId } from "./src/server-game.js";
 
 const root = new URL(".", import.meta.url).pathname;
-const localEnvFile = join(root, ".env");
 const dataDir = join(root, "data");
 const roomFile = join(dataDir, "rooms.json");
 const port = Number(process.env.PORT || 4177);
@@ -20,25 +20,9 @@ const types = {
 };
 
 const rooms = await readRooms();
-const openRouterEnv = await readOpenRouterEnv();
 const modelClient = createModelClient({
-  apiKey: openRouterEnv.OPENROUTER_API_KEY,
-  config: configFromEnv(openRouterEnv)
+  apiKey: await getOpenRouterApiKey()
 });
-
-async function readOpenRouterEnv() {
-  let fileEnv = {};
-  try {
-    fileEnv = parseEnv(await readFile(localEnvFile, "utf8"));
-  } catch {
-    fileEnv = {};
-  }
-  return {
-    ...fileEnv,
-    OPENROUTER_API_KEY: process.env.OPENROUTER_API_KEY || fileEnv.OPENROUTER_API_KEY || "",
-    OPENROUTER_MODELS: process.env.OPENROUTER_MODELS || fileEnv.OPENROUTER_MODELS || ""
-  };
-}
 
 async function readRooms() {
   try {
@@ -55,7 +39,12 @@ async function persistRooms() {
 
 function resolvePath(url) {
   const pathname = new URL(url, `http://localhost:${port}`).pathname;
-  const requested = pathname === "/" || pathname.startsWith("/room/") ? "/index.html" : pathname;
+  const requested = pathname === "/" || pathname.startsWith("/room/")
+    ? "/index.html"
+    : pathname.startsWith("/src/")
+      ? pathname
+      : null;
+  if (!requested) return null;
   const candidate = normalize(join(root, requested));
   if (!candidate.startsWith(root)) return null;
   return candidate;
@@ -77,15 +66,13 @@ function modelStatus() {
   return {
     available: modelClient.available,
     provider: modelClient.config.provider,
-    freeModels: modelClient.config.freeModels,
-    publicModelSource: modelClient.config.publicModelSource,
     timeoutMs: modelClient.config.timeoutMs
   };
 }
 
 async function handleApi(req, res, url) {
   if (req.method === "GET" && url.pathname === "/api/config") {
-    send(res, 200, { modes: modeCatalog, modelStatus: modelStatus() });
+    send(res, 200, { modes: modeCatalog, modelStatus: modelStatus(), modelCatalog: await getModelCatalog() });
     return true;
   }
 
@@ -159,7 +146,8 @@ async function handleApi(req, res, url) {
     const body = await readBody(req);
     try {
       authorizeModelStep(room, body.token, body.step);
-      await runModelStep(room, modelClient, body.step);
+      const model = selectModel(await getModelCatalog(), body.model);
+      await runModelStep(room, modelClient, body.step, model);
       await persistRooms();
       send(res, 200, sanitizeRoom(room, body.token, modelStatus()));
     } catch (error) {

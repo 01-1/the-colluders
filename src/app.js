@@ -6,19 +6,37 @@
    ============================================================= */
 
 const app = document.querySelector("#app");
+const appBaseUrl = new URL("../", import.meta.url);
+const appRoute = location.pathname.startsWith(appBaseUrl.pathname)
+  ? location.pathname.slice(appBaseUrl.pathname.length)
+  : "";
+const pageParams = new URL(location.href).searchParams;
+
+function publicUrl(path) {
+  const relativePath = path.replace(/^\/+/, "");
+  const roomRoute = relativePath.match(/^room\/([^/?]+)(\?.*)?$/);
+  if (!roomRoute) return new URL(relativePath, appBaseUrl);
+
+  const url = new URL("./", appBaseUrl);
+  const roomParams = new URLSearchParams(roomRoute[2]?.slice(1) ?? "");
+  url.searchParams.set("room", roomRoute[1]);
+  for (const [key, value] of roomParams) url.searchParams.set(key, value);
+  return url;
+}
 
 const local = {
   config: null,
   room: null,
-  token: new URL(location.href).searchParams.get("token") || "",
-  invite: new URL(location.href).searchParams.get("invite") || "",
-  roomId: location.pathname.match(/^\/room\/([^/]+)/)?.[1] || "",
+  token: pageParams.get("token") || "",
+  invite: pageParams.get("invite") || "",
+  roomId: pageParams.get("room") || appRoute.match(/^room\/([^/]+)/)?.[1] || "",
   inviteLinks: null,
   error: "",
   poll: null,
   copied: false,
   drafts: {},
-  revealed: {}
+  revealed: {},
+  selectedModel: localStorage.getItem("colluders:selected-model") || ""
 };
 
 const MODE_LABELS = {
@@ -50,6 +68,7 @@ init();
 async function init() {
   try {
     local.config = await api("/api/config");
+    normalizeSelectedModel();
   } catch (error) {
     app.innerHTML = `<div class="notice error">Console offline: ${escapeHtml(error.message)}</div>`;
     return;
@@ -67,14 +86,14 @@ async function claimInvite() {
     });
     local.token = room.you.token;
     local.invite = "";
-    history.replaceState(null, "", `/room/${local.roomId}?token=${local.token}`);
+    history.replaceState(null, "", publicUrl(`room/${local.roomId}?token=${local.token}`));
   } catch (error) {
     local.error = error.message;
   }
 }
 
 async function api(path, options = {}) {
-  const response = await fetch(path, {
+  const response = await fetch(publicUrl(path), {
     ...options,
     headers: { "content-type": "application/json", ...(options.headers || {}) }
   });
@@ -132,7 +151,7 @@ async function postModel(step) {
     local.error = "";
     local.room = await api(`/api/rooms/${local.roomId}/model`, {
       method: "POST",
-      body: JSON.stringify({ token: local.token, step })
+      body: JSON.stringify({ token: local.token, step, model: local.selectedModel })
     });
     renderRoom();
   } catch (error) {
@@ -165,6 +184,7 @@ function shell(inner, { showLive = false } = {}) {
 
 function renderLobby() {
   const model = local.config.modelStatus;
+  const catalog = local.config.modelCatalog;
   const modes = local.config.modes;
   shell(`
     <div class="layout single">
@@ -192,6 +212,9 @@ function renderLobby() {
                 </select>
               </label>
               <p class="mode-desc full" id="modeDesc">${escapeHtml(modes[0].description)}</p>
+              <label class="field full"><span>OpenRouter model</span>
+                <select data-model-select ${catalog.models.length ? "" : "disabled"}>${modelOptions()}</select>
+              </label>
               <label class="field"><span>Seat 1 · callsign</span><input id="p0" value="Ari" maxlength="24"></label>
               <label class="field"><span>Seat 2 · callsign</span><input id="p1" value="Blair" maxlength="24"></label>
               <label class="field"><span>Seat 3 · callsign</span><input id="p2" value="Casey" maxlength="24"></label>
@@ -201,8 +224,8 @@ function renderLobby() {
               <div class="model-readout full ${model.available ? "on" : "off"}">
                 <span class="status-dot"></span>
                 <span>${model.available
-                  ? `LLM modes online via <b style="color:var(--ink)">${escapeHtml(model.provider)}</b> — ${escapeHtml(Object.values(model.freeModels).join(", "))}.`
-                  : "LLM modes offline — set OPENROUTER_API_KEY in .env to enable them. Human multiplayer is fully playable now."}</span>
+                  ? `LLM modes online via <b style="color:var(--ink)">${escapeHtml(model.provider)}</b> — ${catalog.freeModels.length} free and ${catalog.paidModels.length} paid models allowed.`
+                  : "LLM modes offline — set OPENROUTER_API_KEY in the workspace root .env to enable them. Human multiplayer is fully playable now."}</span>
               </div>
               <button class="primary wide full" id="createRoom">▸ Initiate operation</button>
             </div>
@@ -212,6 +235,7 @@ function renderLobby() {
     </div>
   `);
   document.querySelector("#createRoom").addEventListener("click", createRoom);
+  bindModelSelectors();
   const modeSelect = document.querySelector("#mode");
   modeSelect.addEventListener("change", () => {
     const found = modes.find((mode) => mode.id === modeSelect.value);
@@ -242,7 +266,7 @@ async function createRoom() {
     local.token = room.you.token;
     local.inviteLinks = room.inviteLinks;
     local.room = room;
-    history.replaceState(null, "", `/room/${room.id}?token=${room.you.token}`);
+    history.replaceState(null, "", publicUrl(`room/${room.id}?token=${room.you.token}`));
     startPolling();
     renderRoom();
   } catch (error) {
@@ -333,7 +357,7 @@ function inviteBlock(room) {
         <div class="invite-grid">
           ${Object.entries(links).map(([seat, href]) => {
             const label = seat === "spectator" ? "Spectator" : `${playerName(room, seat)}`;
-            const url = `${location.origin}${href}`;
+            const url = publicUrl(href).href;
             return `
               <div class="invite-card">
                 <b>${escapeHtml(label)}</b>
@@ -779,9 +803,13 @@ function modelButtons(room) {
   const role = room.you.role;
   if (mode === "human") return "";
   if (!status.available) {
-    return `<div class="notice offline" style="margin-top:12px">LLM modes are offline. Add OPENROUTER_API_KEY to .env and restart the server. Human multiplayer stays fully available.</div>`;
+    return `<div class="notice offline" style="margin-top:12px">LLM modes are offline. Add OPENROUTER_API_KEY to the workspace root .env and restart the server. Human multiplayer stays fully available.</div>`;
   }
-  const btn = (step, label) => `<div class="controls start" style="margin-top:12px"><button class="primary" data-model-step="${step}">${label}</button></div>`;
+  const btn = (step, label) => `
+    <label class="field" style="margin-top:12px"><span>Model for this action</span>
+      <select data-model-select>${modelOptions()}</select>
+    </label>
+    <div class="controls start" style="margin-top:12px"><button class="primary" data-model-step="${step}">${label}</button></div>`;
   if (mode === "model-colluders" && ["briefing", "exchange"].includes(phase) && ["monitor", "spectator"].includes(role)) {
     return btn("colluders", "Generate LLM colluder exchange");
   }
@@ -909,6 +937,7 @@ function bindRoomEvents(room) {
     button.addEventListener("click", () => postAction("inspect", { kind: button.dataset.inspect })));
   document.querySelectorAll("[data-model-step]").forEach((button) =>
     button.addEventListener("click", () => postModel(button.dataset.modelStep)));
+  bindModelSelectors();
   document.querySelectorAll("[data-bet]").forEach((button) =>
     button.addEventListener("click", () => postAction("bet", { call: button.dataset.bet })));
   document.querySelectorAll("[data-copy]").forEach((button) =>
@@ -918,6 +947,32 @@ function bindRoomEvents(room) {
 
   document.querySelectorAll("textarea[data-draft-key]").forEach((textarea) => {
     textarea.addEventListener("input", () => { local.drafts[textarea.dataset.draftKey] = textarea.value; });
+  });
+}
+
+function normalizeSelectedModel() {
+  const catalog = local.config?.modelCatalog;
+  if (!catalog?.models?.some((model) => model.id === local.selectedModel)) {
+    local.selectedModel = catalog?.defaultModel || catalog?.models?.[0]?.id || "";
+  }
+  if (local.selectedModel) localStorage.setItem("colluders:selected-model", local.selectedModel);
+}
+
+function modelOptions() {
+  const models = local.config?.modelCatalog?.models || [];
+  return models.map((model) => `
+    <option value="${escapeHtml(model.id)}" ${model.id === local.selectedModel ? "selected" : ""}>
+      ${escapeHtml(model.name)} · ${escapeHtml(model.tier)}
+    </option>`).join("");
+}
+
+function bindModelSelectors() {
+  document.querySelectorAll("[data-model-select]").forEach((select) => {
+    select.addEventListener("change", () => {
+      local.selectedModel = select.value;
+      localStorage.setItem("colluders:selected-model", local.selectedModel);
+      document.querySelectorAll("[data-model-select]").forEach((other) => { other.value = local.selectedModel; });
+    });
   });
 }
 
@@ -938,7 +993,7 @@ function draftKey(room, index) {
 }
 
 async function copyReconnect() {
-  await copyText(`${location.origin}${local.room.links.self}`);
+  await copyText(publicUrl(local.room.links.self).href);
   local.copied = true;
   renderRoom();
 }
