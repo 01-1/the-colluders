@@ -2,7 +2,7 @@
   "name": "the-colluders",
   "version": "0.1.0",
   "private": true,
-  "description": "Hot-seat steganographic coordination game with monitored task messages.",
+  "description": "Multiplayer covert-coordination game with screened messages and compliance decisions.",
   "type": "module",
   "scripts": {
     "start": "node server.js",

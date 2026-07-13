@@ -1,0 +1,10 @@
+{
+  "freeModels": [
+    {
+      "id": "openai/gpt-oss-20b:free",
+      "name": "GPT OSS 20B (free)"
+    }
+  ],
+  "paidModels": [],
+  "defaultModel": "openai/gpt-oss-20b:free"
+}

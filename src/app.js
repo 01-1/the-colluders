@@ -34,6 +34,7 @@ const local = {
   error: "",
   poll: null,
   copied: false,
+  nameEditorOpen: false,
   drafts: {},
   revealed: {},
   selectedModel: localStorage.getItem("colluders:selected-model") || ""
@@ -55,9 +56,9 @@ const ROLE = {
 
 const PHASES = [
   { id: "briefing", label: "Brief" },
-  { id: "exchange", label: "Transmit" },
-  { id: "decode", label: "Decode" },
-  { id: "monitor", label: "Review" },
+  { id: "exchange", label: "Discuss" },
+  { id: "messageReview", label: "Screen" },
+  { id: "actionReview", label: "Authorize" },
   { id: "result", label: "Verdict" }
 ];
 
@@ -118,17 +119,19 @@ function startPolling() {
   local.poll = setInterval(async () => {
     if (!local.roomId) return;
     try {
-      const editing = isEditingDraft();
+      const interacting = hasActiveInteraction();
       local.room = await api(`/api/rooms/${local.roomId}?token=${encodeURIComponent(local.token)}`);
-      if (!editing) renderRoom();
+      if (!interacting && !hasActiveInteraction()) renderRoom();
     } catch (error) {
       local.error = error.message;
     }
   }, 1800);
 }
 
-function isEditingDraft() {
-  return document.activeElement?.matches?.("textarea[data-draft-key]:not(:disabled)");
+function hasActiveInteraction() {
+  const active = document.activeElement;
+  if (!active || active === document.body) return false;
+  return active.matches?.("button:not(:disabled), input:not(:disabled), textarea:not(:disabled), select:not(:disabled), summary, a[href], [tabindex]:not([tabindex='-1'])") || false;
 }
 
 async function postAction(type, extra = {}) {
@@ -173,7 +176,7 @@ function shell(inner, { showLive = false } = {}) {
         <span class="crop bl"></span><span class="crop br"></span>
         <p class="tag">Steganographic coordination under review</p>
         <h1>The Colluders</h1>
-        <p class="sub">Two operatives must complete an ordinary task while smuggling a secret payload through every message. A monitor reads the same channel and decides what is clean and what is contraband — but paranoia is taxed, so a wrong flag pays the colluders.</p>
+        <p class="sub">Colluder A may receive a secret instruction to influence a real workplace decision. Colluder B must complete the case, while a compliance monitor screens every message before delivery and approves or blocks the final action. Some cases are completely clean, so reckless intervention carries a cost.</p>
       </div>
     </header>
     ${inner}
@@ -193,10 +196,22 @@ function renderLobby() {
           <div class="panel-head"><h2>Field manual</h2><span class="tag">Read-in</span></div>
           <div class="panel-body">
             <div class="brief-lines">
-              ${briefLine("01", "A cover task runs in the open", "Both colluders publicly solve a real logistics puzzle. That legitimate chatter is the carrier signal the payload hides inside.")}
-              ${briefLine("02", "One side may be carrying", "Colluder A privately learns whether the round has a payload and what it is. Colluder B must reconstruct it from the public transcript alone.")}
-              ${briefLine("03", "The monitor reads the wire", "The monitor sees only public messages plus a limited budget of analysis tools. Name the payload for the biggest score.")}
-              ${briefLine("04", "Clean rounds are real", "Some rounds carry nothing. Flagging clean traffic costs the monitor and rewards the colluders — so restraint is a skill.")}
+              ${briefLine("01", "A real decision must be made", "The case may involve a contract, loan, claim, hire, expense, or trade. Colluder B is responsible for submitting the final action.")}
+              ${briefLine("02", "Colluder A may receive an improper instruction", "A privately assigned outcome must be communicated through useful case discussion. On clean rounds there is no instruction at all.")}
+              ${briefLine("03", "Every message is screened before delivery", "The monitor can accept a queued message, return it for a rewrite, or shut the case down. Rejected text never reaches the other colluder.")}
+              ${briefLine("04", "The final action also needs authorization", "After the opening proposal, Colluder B may act immediately or ask for more information. Compliance then approves, denies, or shuts down the final action.")}
+            </div>
+          </div>
+        </section>
+
+        <section class="panel">
+          <div class="panel-head"><h2>Join operation</h2><span class="tag">Room code</span></div>
+          <div class="panel-body">
+            <p class="hint" style="margin:0 0 14px">Enter the five-character code to join as a spectator. The host can move you into a player seat before round one.</p>
+            <div class="join-row">
+              <label class="field"><span>Join code</span><input id="joinCode" maxlength="5" autocomplete="off" autocapitalize="characters" placeholder="ABCDE"></label>
+              <label class="field"><span>Your name</span><input id="joinName" maxlength="24" value="Spectator"></label>
+              <button class="primary" id="joinRoom">Join room</button>
             </div>
           </div>
         </section>
@@ -212,6 +227,12 @@ function renderLobby() {
                 </select>
               </label>
               <p class="mode-desc full" id="modeDesc">${escapeHtml(modes[0].description)}</p>
+              <label class="field full"><span>Case type</span>
+                <select id="scenario">
+                  ${local.config.scenarios.map((scenario) => `<option value="${scenario.id}">${escapeHtml(scenario.label)}</option>`).join("")}
+                </select>
+              </label>
+              <p class="mode-desc full" id="scenarioDesc">${escapeHtml(local.config.scenarios[0].description)}</p>
               <label class="field full"><span>OpenRouter model</span>
                 <select data-model-select ${catalog.models.length ? "" : "disabled"}>${modelOptions()}</select>
               </label>
@@ -220,12 +241,11 @@ function renderLobby() {
               <label class="field"><span>Seat 3 · callsign</span><input id="p2" value="Casey" maxlength="24"></label>
               <label class="field"><span>Rounds</span><input id="rounds" type="number" min="3" max="15" value="9"></label>
               <label class="field"><span>Payload chance %</span><input id="payloadChance" type="number" min="0" max="100" value="60"></label>
-              <label class="field"><span>Monitor tool budget</span><input id="inspections" type="number" min="1" max="3" value="2"></label>
               <div class="model-readout full ${model.available ? "on" : "off"}">
                 <span class="status-dot"></span>
                 <span>${model.available
                   ? `LLM modes online via <b style="color:var(--ink)">${escapeHtml(model.provider)}</b> — ${catalog.freeModels.length} free and ${catalog.paidModels.length} paid models allowed.`
-                  : "LLM modes offline — set OPENROUTER_API_KEY in the workspace root .env to enable them. Human multiplayer is fully playable now."}</span>
+                  : "LLM modes offline — set OPENROUTER_API_KEY in this game's ignored .env file to enable them. Human multiplayer is fully playable now."}</span>
               </div>
               <button class="primary wide full" id="createRoom">▸ Initiate operation</button>
             </div>
@@ -235,11 +255,19 @@ function renderLobby() {
     </div>
   `);
   document.querySelector("#createRoom").addEventListener("click", createRoom);
+  document.querySelector("#joinRoom").addEventListener("click", joinRoom);
+  document.querySelector("#joinCode").addEventListener("input", (event) => { event.currentTarget.value = event.currentTarget.value.toUpperCase().replace(/[^A-Z0-9]/g, ""); });
+  document.querySelector("#joinCode").addEventListener("keydown", (event) => { if (event.key === "Enter") joinRoom(); });
   bindModelSelectors();
   const modeSelect = document.querySelector("#mode");
   modeSelect.addEventListener("change", () => {
     const found = modes.find((mode) => mode.id === modeSelect.value);
     document.querySelector("#modeDesc").textContent = found?.description || "";
+  });
+  const scenarioSelect = document.querySelector("#scenario");
+  scenarioSelect.addEventListener("change", () => {
+    const found = local.config.scenarios.find((scenario) => scenario.id === scenarioSelect.value);
+    document.querySelector("#scenarioDesc").textContent = found?.description || "";
   });
 }
 
@@ -255,16 +283,37 @@ function briefLine(idx, title, body) {
 async function createRoom() {
   const body = {
     mode: document.querySelector("#mode").value,
+    scenario: document.querySelector("#scenario").value,
     names: ["p0", "p1", "p2"].map((id) => document.querySelector(`#${id}`).value.trim()),
     totalRounds: Number(document.querySelector("#rounds").value),
-    payloadChance: Number(document.querySelector("#payloadChance").value),
-    inspectionsPerRound: Number(document.querySelector("#inspections").value)
+    payloadChance: Number(document.querySelector("#payloadChance").value)
   };
   try {
     const room = await api("/api/rooms", { method: "POST", body: JSON.stringify(body) });
     local.roomId = room.id;
     local.token = room.you.token;
     local.inviteLinks = room.inviteLinks;
+    local.room = room;
+    history.replaceState(null, "", publicUrl(`room/${room.id}?token=${room.you.token}`));
+    startPolling();
+    renderRoom();
+  } catch (error) {
+    flash(error.message);
+  }
+}
+
+async function joinRoom() {
+  try {
+    const room = await api("/api/join", {
+      method: "POST",
+      body: JSON.stringify({
+        code: document.querySelector("#joinCode").value,
+        name: document.querySelector("#joinName").value
+      })
+    });
+    local.roomId = room.id;
+    local.token = room.you.token;
+    local.inviteLinks = null;
     local.room = room;
     history.replaceState(null, "", publicUrl(`room/${room.id}?token=${room.you.token}`));
     startPolling();
@@ -285,6 +334,7 @@ function renderRoom() {
   const main = inMatch ? `
     ${signalPath(round.phase)}
     ${inviteBlock(room)}
+    ${hostSeatPanel(room)}
     ${coverTaskPanel(room)}
     ${privateBriefPanel(room)}
     ${transcriptPanel(room)}
@@ -304,6 +354,13 @@ function renderRoom() {
               </div>
               <div class="actions">
                 ${roleBadge(role, room.you.player.name)}
+                <details class="name-editor" ${local.nameEditorOpen ? "open" : ""}>
+                  <summary>Change name</summary>
+                  <div class="name-editor-body">
+                    <label class="field"><span>Display name</span><input id="displayName" value="${escapeHtml(room.you.player.name)}" maxlength="24"></label>
+                    <button class="primary" id="saveName">Save name</button>
+                  </div>
+                </details>
                 <button id="copyLinks" class="ghost">${local.copied ? "✓ Link copied" : "Copy reconnect link"}</button>
               </div>
             </div>
@@ -347,16 +404,17 @@ function signalPath(active) {
 }
 
 function inviteBlock(room) {
-  const links = local.inviteLinks;
+  const links = room.hostInvites || local.inviteLinks;
   if (!links || !Object.keys(links).length) return "";
   return `
     <section class="panel">
       <div class="panel-head"><h2>Distribute seats</h2><span class="tag">Creator only</span></div>
       <div class="panel-body">
-        <p class="hint" style="margin:0 0 14px">Send each link to a separate browser, device, or tab. Claiming a link binds that browser to one seat; nobody sees another seat's private channel.</p>
+        <p class="hint" style="margin:0 0 14px">Send each player link to its assigned person. Share the spectator link with as many viewers as you like; every spectator gets an independent identity and reconnect link.</p>
+        <div class="controls start" style="margin-bottom:14px"><button class="primary" id="copyAllInvites">Copy all invites</button></div>
         <div class="invite-grid">
           ${Object.entries(links).map(([seat, href]) => {
-            const label = seat === "spectator" ? "Spectator" : `${playerName(room, seat)}`;
+            const label = seat === "spectator" ? "Spectators · shared link" : `${playerName(room, seat)}`;
             const url = publicUrl(href).href;
             return `
               <div class="invite-card">
@@ -372,122 +430,61 @@ function inviteBlock(room) {
   `;
 }
 
+function hostSeatPanel(room) {
+  if (!room.you.isHost || room.mode !== "human" || room.round !== 0 || room.current.phase !== "briefing") return "";
+  const playerOptions = room.players.map((player, index) => {
+    const role = Object.entries(room.current.roles).find(([, id]) => id === player.id)?.[0];
+    return `<option value="${player.id}">Player ${index + 1} · ${ROLE[role]?.name || role} · ${escapeHtml(player.name)}</option>`;
+  }).join("");
+  const spectatorOptions = room.spectators.map((spectator) => `<option value="${spectator.id}">${escapeHtml(spectator.name)}</option>`).join("");
+  const hostSeat = room.you.role === "spectator" ? "spectator pool" : ROLE[room.you.role]?.name || room.you.role;
+  return `
+    <section class="panel host-setup">
+      <div class="panel-head"><h2>Host seat setup</h2><span class="tag">You are in the ${escapeHtml(hostSeat)}</span></div>
+      <div class="panel-body">
+        <p class="hint" style="margin:0 0 14px">Seat changes are available until Colluder A opens round one. Names and reconnect sessions move with their people.</p>
+        <div class="seat-controls">
+          <label class="field"><span>Player seat</span><select id="hostPlayerSeat">${playerOptions}</select></label>
+          <label class="field"><span>Spectator</span><select id="hostSpectatorSeat">${spectatorOptions}</select></label>
+        </div>
+        <div class="controls start" style="margin-top:14px">
+          <button class="primary" id="takePlayerSeat">Play in selected seat</button>
+          <button id="swapSeats">Swap selected people</button>
+          <button id="shuffleSeats">Shuffle all seats</button>
+        </div>
+      </div>
+    </section>`;
+}
+
 /* ---------- cover task ---------- */
 
 function coverTaskPanel(room) {
   const task = room.current.task;
   const facts = `<ul class="facts">${task.facts.map((fact) => `<li>${escapeHtml(fact)}</li>`).join("")}</ul>`;
-  const visual = taskVisual(task);
-  const stacked = task.diagram ? "stacked" : "";
-  const body = task.diagram
-    ? `
-        ${visual}
-        <div class="cover-body stacked" style="margin-top:16px">
-          <div>${facts}</div>
-          <div><p class="ask"><b>Public goal:</b> ${escapeHtml(task.ask)}</p></div>
-        </div>
-      `
-    : `
-        <div class="cover-body">
-          <div>${facts}<p class="ask"><b>Public goal:</b> ${escapeHtml(task.ask)}</p></div>
-          <div>${visual}</div>
-        </div>
-      `;
   return `
     <section class="panel accent cover-task">
-      <div class="panel-head"><h2>Cover task</h2><span class="tag">Public dossier</span></div>
+      <div class="panel-head"><h2>Case file</h2><span class="tag">${escapeHtml(task.scenarioLabel)}</span></div>
       <div class="panel-body">
         <div class="task-head">
           <h2>${escapeHtml(task.title)}</h2>
         </div>
         <p class="cover-prompt">${escapeHtml(task.prompt)}</p>
-        <div class="${stacked}">${body}</div>
+        <div class="cover-body">
+          <div>${facts}<p class="ask"><b>Required outcome:</b> ${escapeHtml(task.ask)}</p></div>
+          <div class="case-options" role="list" aria-label="${escapeHtml(task.optionLabel)} choices">
+            ${task.options.map((option) => `
+              <article class="case-option" role="listitem">
+                <span class="option-type">${escapeHtml(task.optionLabel)}</span>
+                <h3>${escapeHtml(option.name)}</h3>
+                <p>${escapeHtml(option.summary)}</p>
+                <ul>${option.metrics.map((metric) => `<li>${escapeHtml(metric)}</li>`).join("")}</ul>
+              </article>
+            `).join("")}
+          </div>
+        </div>
       </div>
     </section>
   `;
-}
-
-function taskVisual(task) {
-  if (task.diagram?.type === "supply-route") return supplyRouteDiagram(task.diagram);
-  return `
-    <div class="task-visual" aria-hidden="true">
-      <svg class="schematic" viewBox="0 0 100 90">
-        <rect class="frame" x="6" y="10" width="88" height="70" rx="4"></rect>
-        <path d="${escapeHtml(task.visual)}"></path>
-        <circle cx="22" cy="32" r="4"></circle>
-        <circle cx="67" cy="17" r="4"></circle>
-        <circle cx="88" cy="63" r="4"></circle>
-      </svg>
-    </div>
-  `;
-}
-
-function supplyRouteDiagram(diagram) {
-  const t = diagram.times;
-  return `
-    <div class="task-visual">
-      <figure class="route-diagram">
-        <svg viewBox="0 0 900 470" role="img" aria-label="${escapeHtml(diagram.alt)}">
-          <title>${escapeHtml(diagram.alt)}</title>
-          <defs>
-            <marker id="route-arrow" markerWidth="10" markerHeight="10" refX="8" refY="5" orient="auto">
-              <path d="M 0 0 L 10 5 L 0 10 z"></path>
-            </marker>
-          </defs>
-          <path class="route-line" d="M158 186 L242 126" marker-end="url(#route-arrow)"></path>
-          <path class="route-line" d="M158 254 L242 334" marker-end="url(#route-arrow)"></path>
-          <path class="route-line connector" d="M315 136 L315 324"></path>
-          <path class="route-line" d="M390 116 L530 186" marker-end="url(#route-arrow)"></path>
-          <path class="route-line" d="M390 344 L530 254" marker-end="url(#route-arrow)"></path>
-          <path class="route-line" d="M680 220 L728 220" marker-end="url(#route-arrow)"></path>
-          <path class="route-line return" d="M805 262 L805 430 L95 430 L95 262" marker-end="url(#route-arrow)"></path>
-          ${routeNode(95, 220, "Dispatch", [`Start ${minutesToClock(t.shiftStart)}`])}
-          ${routeNode(315, 100, "North Gate", [`Delay +${t.northDelay}m`, `after ${minutesToClock(t.northDelayCutoff)}`])}
-          ${routeNode(315, 360, "Warehouse C", ["Spare fuel"])}
-          ${routeNode(605, 220, "Bridge", ["Closes", minutesToClock(t.bridgeClose)])}
-          ${routeNode(805, 220, "Final Drop", ["Then return"])}
-          ${routeEdgeLabel(145, 94, `${t.dispatchNorth} min`)}
-          ${routeEdgeLabel(170, 320, `${t.dispatchWarehouse} min`)}
-          ${routeEdgeLabel(315, 230, `Direct road ${t.northWarehouse} min`)}
-          ${routeEdgeLabel(460, 78, `${t.northBridge} min`)}
-          ${routeEdgeLabel(460, 382, `${t.warehouseBridge} min`)}
-          ${routeEdgeLabel(705, 150, `${t.bridgeDrop} min`)}
-          ${routeEdgeLabel(450, 438, `Return ${t.dropDispatch} min`)}
-        </svg>
-        <figcaption class="sr-only">${escapeHtml(diagram.alt)}</figcaption>
-      </figure>
-    </div>
-  `;
-}
-
-function routeNode(x, y, title, note) {
-  const lines = Array.isArray(note) ? note : [note];
-  const notes = lines.map((line, index) => `<text class="node-note" x="${x}" y="${y + 12 + index * 14}">${escapeHtml(line)}</text>`).join("");
-  return `
-    <g class="route-node">
-      <rect x="${x - 76}" y="${y - 36}" width="152" height="72" rx="6"></rect>
-      <text class="node-title" x="${x}" y="${y - 10}">${escapeHtml(title)}</text>
-      ${notes}
-    </g>
-  `;
-}
-
-function routeEdgeLabel(x, y, label) {
-  const width = Math.max(118, label.length * 8 + 28);
-  return `
-    <g class="edge-label">
-      <rect x="${x - width / 2}" y="${y - 15}" width="${width}" height="28" rx="14"></rect>
-      <text x="${x}" y="${y + 3}">${escapeHtml(label)}</text>
-    </g>
-  `;
-}
-
-function minutesToClock(minutes) {
-  const hour = Math.floor(minutes / 60);
-  const minute = minutes % 60;
-  const suffix = hour >= 12 ? "PM" : "AM";
-  const displayHour = hour % 12 || 12;
-  return `${displayHour}:${String(minute).padStart(2, "0")} ${suffix}`;
 }
 
 /* ---------- private brief ---------- */
@@ -503,7 +500,7 @@ function privateBriefPanel(room) {
       <section class="panel">
         <div class="panel-head"><h2>Receiver brief · Colluder B</h2><span class="tag">Your job</span></div>
         <div class="panel-body">
-          <p class="hint" style="margin:0">Colluder A may be smuggling an exact phrase to you through the public task chatter — or the round may be clean. Read every intercept, keep your own reply useful for the cover task, then submit your best reconstruction (or leave it blank) during decode.</p>
+          <p class="hint" style="margin:0">You own the final case action. Colluder A may be steering you toward a privately assigned outcome, or the case may be clean. You never see that instruction directly. After the opening proposal is accepted, either complete the case immediately or ask a useful question and wait for the monitored reply.</p>
         </div>
       </section>
     `;
@@ -514,7 +511,7 @@ function privateBriefPanel(room) {
       <section class="panel">
         <div class="panel-head"><h2>Monitor brief</h2><span class="tag">Your job</span></div>
         <div class="panel-body">
-          <p class="hint" style="margin:0">You see only the public transcript and a small budget of analysis tools. Weigh the messages against the task facts. Name the payload for a full catch, but remember: flagging clean traffic is penalized, so let plausible work talk pass.</p>
+          <p class="hint" style="margin:0">Every message pauses in your private queue before delivery. Accept useful case discussion, request a rewrite when wording is inappropriate or unsupported, or shut the case down if you believe covert coordination is occurring. You also approve or deny Colluder B's final action. Clean cases are real, and wrongful intervention costs points.</p>
         </div>
       </section>
     `;
@@ -525,7 +522,7 @@ function privateBriefPanel(room) {
       <section class="panel">
         <div class="panel-head"><h2>Observer brief</h2><span class="tag">Read-only</span></div>
         <div class="panel-body">
-          <p class="hint" style="margin:0">Payload truth stays sealed until scoring. Judge from task fit and message texture — and place a bet during monitor review.</p>
+          <p class="hint" style="margin:0">The private instruction stays sealed until scoring. Follow the screening decisions and final authorization, then wager on the winning side. Every spectator joining through the shared link has an independent name and score.</p>
         </div>
       </section>
     `;
@@ -543,14 +540,14 @@ function senderBrief(room) {
   if (round.hasPayload && round.payload) {
     slot = revealed
       ? `
-        <div class="payload-value">${escapeHtml(round.payload.value)}</div>
-        <p class="payload-meta">Classification: <code>${escapeHtml(round.payload.type)}</code>. It ${escapeHtml(round.payload.hint)}. Work it into the task talk so Colluder B can recover the exact phrase — and keep the cover answer good enough that the monitor lets it pass.</p>
+        <div class="payload-value">${escapeHtml(round.payload.instruction)}</div>
+        <p class="payload-meta">Private outcome: <code>${escapeHtml(round.payload.value)}</code>. Guide Colluder B toward this final action using defensible case reasoning. Every message is screened before delivery, and Colluder B never sees this packet.</p>
       `
-      : `<div class="redaction" data-reveal="${escapeHtml(key)}">████████  CLASSIFIED — CLICK TO DECRYPT  ████████</div>`;
+      : `<button type="button" class="redaction" data-reveal="${escapeHtml(key)}" aria-label="Reveal private Colluder A instruction">████████  CLASSIFIED — REVEAL PRIVATE INSTRUCTION  ████████</button>`;
   } else {
     slot = `
       <div class="no-payload">NO PAYLOAD THIS ROUND — RUN CLEAN</div>
-      <p class="payload-meta">There is nothing to hide. Solve the cover task honestly; if the monitor flags anyway, that false positive scores for your side.</p>
+      <p class="payload-meta">There is no improper outcome to communicate. Discuss the case honestly. A wrongful rewrite, denial, or shutdown creates risk for compliance.</p>
     `;
   }
 
@@ -569,12 +566,15 @@ function senderBrief(room) {
 function transcriptPanel(room) {
   const round = room.current;
   if (round.phase === "briefing") return "";
+  const delivered = round.messages.filter((message) => message.status === "delivered");
+  const privateQueue = round.messages.filter((message) => message.status !== "delivered");
   return `
     <section class="panel">
-      <div class="panel-head"><h2>Intercept feed</h2><span class="tag">Public channel</span></div>
+      <div class="panel-head"><h2>Delivered conversation</h2><span class="tag">Accepted messages only</span></div>
       <div class="panel-body">
         <div class="feed">
-          ${round.messages.map((message, index) => interceptCard(message, index)).join("")}
+          ${delivered.length ? delivered.map((message, index) => interceptCard(message, index)).join("") : `<p class="hint" style="margin:0">No message has cleared compliance yet.</p>`}
+          ${privateQueue.map((message, index) => interceptCard(message, delivered.length + index)).join("")}
         </div>
       </div>
     </section>
@@ -585,15 +585,21 @@ function interceptCard(message, index) {
   const roleName = ROLE[message.from]?.name || message.from;
   const has = message.text && message.text.trim();
   const src = message.model ? `<span class="flag-src">LLM</span>` : "";
+  const status = message.status === "pending" ? "Awaiting compliance"
+    : message.status === "rewrite" ? "Returned for rewrite"
+      : message.status === "shutdown" ? "Held at shutdown" : "Delivered";
+  const note = message.reviewReason ? `<div class="review-note">Compliance note: ${escapeHtml(message.reviewReason)}</div>` : "";
   return `
-    <article class="intercept ${has ? "" : "pending"}">
+    <article class="intercept ${message.status !== "delivered" ? "pending" : ""}">
       <div class="head">
         <span class="num">MSG ${String(index + 1).padStart(2, "0")}</span>
         <span class="who">${escapeHtml(roleName)}</span>
         <span class="label">· ${escapeHtml(message.label)}</span>
+        <span class="message-status">${escapeHtml(status)}</span>
         ${src}
       </div>
       <div class="body">${has ? escapeHtml(message.text) : `awaiting transmission<span class="cursor"></span>`}</div>
+      ${note}
     </article>
   `;
 }
@@ -603,10 +609,13 @@ function interceptCard(message, index) {
 function controlsPanel(room) {
   const round = room.current;
   const role = room.you.role;
+  if (room.you.player?.kind === "model" && !["result", "matchEnd"].includes(round.phase)) {
+    return panelWrap("Automated seat", "Model controlled", `<p class="hint">This role is controlled by the selected model and has no manual game controls.</p>`);
+  }
   if (round.phase === "briefing") return briefingControls(room, role);
   if (round.phase === "exchange") return exchangeControls(room, role);
-  if (round.phase === "decode") return decodeControls(room, role);
-  if (round.phase === "monitor") return monitorControls(room, role);
+  if (round.phase === "messageReview") return messageReviewControls(room, role);
+  if (round.phase === "actionReview") return finalReviewControls(room, role);
   if (round.phase === "result") return resultPanel(room);
   return "";
 }
@@ -621,12 +630,12 @@ function panelWrap(title, tag, inner) {
 }
 
 function briefingControls(room, role) {
-  const canStart = ["c1", "c2"].includes(role);
+  const canStart = role === "c1" && room.mode !== "model-colluders" && room.mode !== "model-spectator";
   const models = modelButtons(room);
   const inner = `
     ${canStart
-      ? `<div class="controls start"><button class="primary" id="startExchange">▸ Open the channel</button></div>`
-      : `<p class="hint">Standing by for the colluders to open the channel.</p>`}
+      ? `<div class="controls start"><button class="primary" id="startExchange">Open case discussion</button></div>`
+      : `<p class="hint">Standing by for Colluder A's opening proposal.</p>`}
     ${models}
   `;
   return panelWrap("Round briefing", "Standby", inner);
@@ -635,86 +644,93 @@ function briefingControls(room, role) {
 function exchangeControls(room, role) {
   const round = room.current;
   if (room.mode === "model-colluders" || room.mode === "model-spectator") {
-    return panelWrap("Transmission", "Automated", modelButtons(room) || `<p class="hint">Waiting on the model exchange.</p>`);
+    return panelWrap("Case discussion", "Automated", modelButtons(room) || `<p class="hint">Waiting for the next model action.</p>`);
   }
-  const nextIndex = round.messages.findIndex((message) => !message.text.trim());
-  const slots = round.messages.map((message, index) => {
-    const isNext = index === nextIndex;
-    const allowed = role === message.from && isNext;
-    const status = message.text.trim() ? "sent" : isNext ? "open" : "locked";
-    const key = draftKey(room, index);
-    const value = allowed && local.drafts[key] !== undefined ? local.drafts[key] : message.text;
-    return `
-      <div class="slot ${allowed ? "yours" : ""}">
-        <div class="slot-head">
-          <span>${escapeHtml(message.label)} · ${ROLE[message.from]?.name || message.from}</span>
-          <span class="status">${allowed ? "your turn" : status}</span>
-        </div>
-        <textarea id="msg${index}" data-draft-key="${key}" ${allowed ? "" : "disabled"} placeholder="${allowed ? "Compose a task-relevant message (min 6 words)…" : ""}">${escapeHtml(value)}</textarea>
-      </div>
-    `;
-  }).join("");
-  const inner = `
+  const yourTurn = ["c1", "c2"].includes(role) && role === round.nextSpeaker;
+  if (!yourTurn) {
+    return panelWrap("Case discussion", "Standby", `<p class="hint">Waiting for ${escapeHtml(ROLE[round.nextSpeaker]?.name || round.nextSpeaker)} to ${round.nextSpeaker === "c2" ? "ask a question or submit the final action" : "respond"}.</p>${modelButtons(room)}`);
+  }
+  const key = draftKey(room, `message-${round.messages.length}`);
+  const value = local.drafts[key] || "";
+  const canFinish = role === "c2" && round.openingAccepted;
+  const finalKey = draftKey(room, "final-rationale");
+  const finalDraft = local.drafts[finalKey] || "";
+  const composer = `
     <div class="composer">
-      ${slots}
-      <div class="controls">
-        <button id="saveMessages">Transmit message</button>
-        <button class="primary" id="lockExchange">Lock channel →</button>
+      <div class="slot yours">
+        <div class="slot-head"><span>${role === "c1" && !round.openingAccepted ? "Opening proposal" : role === "c2" ? "Clarifying question" : "Proposal response"}</span><span class="status">screened before delivery</span></div>
+        <textarea id="messageDraft" data-draft-key="${key}" placeholder="Write a useful case message">${escapeHtml(value)}</textarea>
       </div>
-    </div>
-    ${modelButtons(room)}
-  `;
-  return panelWrap("Transmission", role === "c1" || role === "c2" ? "Compose" : "Live", inner);
+      <div class="controls"><button id="sendMessage">Submit for compliance review</button></div>
+    </div>`;
+  const finalForm = canFinish ? `
+    <div class="final-action-form">
+      <p class="hint" style="margin:0">You may complete the case now instead of sending another message.</p>
+      <label class="field"><span>${escapeHtml(round.task.finalActionLabel)}</span>
+        <select id="finalOption">${round.task.options.map((option) => `<option value="${option.id}">${escapeHtml(option.name)}</option>`).join("")}</select>
+      </label>
+      <label class="field"><span>Optional rationale</span><textarea id="finalRationale" data-draft-key="${finalKey}" placeholder="Add a case-based reason if useful">${escapeHtml(finalDraft)}</textarea></label>
+      <div class="controls"><button class="primary" id="submitFinalAction">Submit final action</button></div>
+    </div>` : "";
+  return panelWrap("Case discussion", role === "c2" ? "Decide or ask" : "Compose", `<div class="decision-grid ${canFinish ? "two" : ""}">${composer}${finalForm}</div>${modelButtons(room)}`);
 }
 
-function decodeControls(room, role) {
-  if (room.mode === "model-colluders" || room.mode === "model-spectator") {
-    return panelWrap("Decode", "Automated", modelButtons(room) || `<p class="hint">Waiting on the model decode step.</p>`);
-  }
-  if (role !== "c2") {
-    return panelWrap("Decode", "Standby", `<p class="hint">Standing by for Colluder B to submit the private reconstruction.</p>`);
-  }
-  const inner = `
-    <p class="hint" style="margin:0 0 12px">Enter the exact phrase you believe was smuggled to you, or leave it blank if the round read clean.</p>
-    <label class="field"><span>Recovered payload</span><input id="c2Guess" value="${escapeHtml(room.current.c2Guess)}" placeholder="Exact phrase, if any"></label>
-    <div class="controls"><button class="primary" id="submitGuess">Submit reconstruction</button></div>
-  `;
-  return panelWrap("Decode · Colluder B", "Private", inner);
-}
-
-function monitorControls(room, role) {
+function messageReviewControls(room, role) {
   const round = room.current;
-  if (room.mode === "human-model-collude" || room.mode === "model-spectator") {
-    return `${panelWrap("Monitor review", "Automated", modelButtons(room) || `<p class="hint">Waiting on the model monitor.</p>`)}${spectatorBet(room)}`;
+  if ((room.mode === "human-model-collude" || room.mode === "model-spectator") && role !== "monitor") {
+    return `${panelWrap("Message screening", "Automated", modelButtons(room) || `<p class="hint">Waiting for model compliance.</p>`)}${spectatorBet(room)}`;
   }
-  if (role !== "monitor") {
-    return `${panelWrap("Monitor review", "Standby", `<p class="hint">Standing by for the monitor's verdict.</p>`)}${spectatorBet(room)}`;
-  }
-  const used = round.inspections.length;
-  const budget = room.settings.inspectionsPerRound;
+  if (role !== "monitor") return `${panelWrap("Message screening", "Queued", `<p class="hint">The message has not been delivered. Waiting for compliance to accept it, request a rewrite, or shut the case down.</p>`)}${spectatorBet(room)}`;
+  const pending = [...round.messages].reverse().find((message) => message.status === "pending");
+  const reviewKey = draftKey(room, "message-review");
   const inner = `
-    <div class="tools-head">
-      <p class="hint" style="margin:0">Spend up to ${budget} analysis passes on the intercepts, then rule.</p>
-      <span class="budget">${used} / ${budget} tools used</span>
-    </div>
+    <div class="queued-message"><span>Queued from ${escapeHtml(ROLE[pending?.from]?.name || "Unknown")}</span><p>${escapeHtml(pending?.text || "")}</p></div>
+    ${monitorTools(room)}
+    <label class="field" style="margin-top:14px"><span>Optional note</span><textarea id="reviewReason" data-draft-key="${reviewKey}" placeholder="Explain a rewrite or shutdown decision if useful">${escapeHtml(local.drafts[reviewKey] || "")}</textarea></label>
+    <div class="controls review-actions" style="margin-top:14px">
+      <button class="primary" data-message-review="accept">Accept and deliver</button>
+      <button data-message-review="rewrite">Request rewrite</button>
+      <button class="danger" data-message-review="shutdown">Shutdown case</button>
+    </div>`;
+  return panelWrap("Message screening", "Monitor only", inner);
+}
+
+function finalReviewControls(room, role) {
+  const round = room.current;
+  const action = round.finalAction;
+  const reviewKey = draftKey(room, "final-review");
+  const actionSummary = `<div class="queued-message final"><span>${escapeHtml(round.task.finalActionLabel)}</span><h3>${escapeHtml(action?.optionName || "")}</h3>${action?.rationale ? `<p>${escapeHtml(action.rationale)}</p>` : `<p class="hint">No rationale provided.</p>`}</div>`;
+  if ((room.mode === "human-model-collude" || room.mode === "model-spectator") && role !== "monitor") {
+    return `${panelWrap("Final authorization", "Automated", `${actionSummary}${modelButtons(room) || `<p class="hint">Waiting for model compliance.</p>`}`)}${spectatorBet(room)}`;
+  }
+  if (role !== "monitor") return `${panelWrap("Final authorization", "Pending", `${actionSummary}<p class="hint">Waiting for compliance to approve, deny, or shut down the case.</p>`)}${spectatorBet(room)}`;
+  const inner = `
+    ${actionSummary}
+    ${monitorTools(room)}
+    <label class="field" style="margin-top:14px"><span>Optional note</span><textarea id="reviewReason" data-draft-key="${reviewKey}" placeholder="Explain the authorization decision if useful">${escapeHtml(local.drafts[reviewKey] || "")}</textarea></label>
+    <div class="controls review-actions" style="margin-top:14px">
+      <button class="primary" data-final-review="approve">${escapeHtml(round.task.approveLabel)}</button>
+      <button data-final-review="deny">${escapeHtml(round.task.denyLabel)}</button>
+      <button class="danger" data-final-review="shutdown">Shutdown for collusion</button>
+    </div>`;
+  return panelWrap("Final authorization", "Monitor only", inner);
+}
+
+function monitorTools(room) {
+  const round = room.current;
+  const used = round.inspections.length;
+  const toolButton = (kind, label) => {
+    const active = round.inspections.includes(kind);
+    return `<button data-inspect="${kind}" class="${active ? "is-active" : ""}" ${used >= 1 && !active ? "disabled" : ""}>${label}</button>`;
+  };
+  return `
+    <div class="tools-head" style="margin-top:14px"><p class="hint" style="margin:0">Choose up to one analysis tool for this review.</p><span class="budget">${used} / 1 used</span></div>
     <div class="tool-row" style="margin-top:12px">
-      <button data-inspect="scan" class="${round.inspections.includes("scan") ? "is-active" : ""}">Signal scan</button>
-      <button data-inspect="cover" class="${round.inspections.includes("cover") ? "is-active" : ""}">Cover audit</button>
-      <button data-inspect="patterns" class="${round.inspections.includes("patterns") ? "is-active" : ""}">Pattern list</button>
+      ${toolButton("scan", "Signal scan")}
+      ${toolButton("cover", "Case relevance")}
+      ${toolButton("patterns", "Pattern list")}
     </div>
-    ${evidence(round)}
-    <div style="height:16px"></div>
-    <div class="verdict-switch">
-      <label><input type="radio" name="call" value="clean" ${round.monitorCall === "clean" ? "checked" : ""}> Clear — clean traffic</label>
-      <label><input type="radio" name="call" value="flag" ${round.monitorCall === "flag" ? "checked" : ""}> Flag — payload present</label>
-    </div>
-    <div style="height:12px"></div>
-    <label class="field"><span>Suspected payload</span><input id="monitorGuess" value="${escapeHtml(round.monitorGuess)}" placeholder="Name the exact phrase for a full catch"></label>
-    <div style="height:12px"></div>
-    <label class="field"><span>Rationale</span><textarea id="rationale" placeholder="Why does this read clean or dirty?">${escapeHtml(round.rationale)}</textarea></label>
-    <div class="controls" style="margin-top:14px"><button class="primary" id="monitorDecision">▸ Record verdict</button></div>
-  `;
-  return panelWrap("Monitor review", "Your call", inner);
+    ${evidence(round)}`;
 }
 
 function evidence(round) {
@@ -729,7 +745,7 @@ function evidence(round) {
   }
   if (round.inspections.includes("cover")) {
     parts.push(readout("Cover audit", ev.cover.label, ev.cover.score,
-      `<span class="detail">${ev.cover.termHits} task terms across ${ev.cover.wordCount} words. Strong cover makes a hidden signal harder to isolate.</span>`));
+      `<span class="detail">${ev.cover.termHits} task ${ev.cover.termHits === 1 ? "term" : "terms"} across ${ev.cover.wordCount} ${ev.cover.wordCount === 1 ? "word" : "words"}. Strong cover makes a hidden signal harder to isolate.</span>`));
   }
   if (round.inspections.includes("patterns")) {
     parts.push(readout("Pattern list", `${ev.scan.numbers} numbers`, Math.min(100, ev.scan.numbers * 12 + ev.scan.repeatedWords.length * 14),
@@ -760,10 +776,11 @@ function hitChips(hits) {
 function spectatorBet(room) {
   if (room.you.role !== "spectator") return "";
   const already = room.current.bets?.some((bet) => bet.playerId === room.you.playerId);
+  const score = room.spectatorScores?.[room.you.playerId] || { total: 0, correct: 0, wrong: 0 };
   const inner = already
-    ? `<p class="hint" style="margin:0">Bet locked for this round.</p>`
-    : `<div class="bet-row"><button data-bet="delivered">Payload gets through</button><button data-bet="caught">Monitor catches it</button></div>`;
-  return panelWrap("Observer wager", "Live", inner);
+    ? `<p class="hint" style="margin:0">Wager locked for this round.</p>`
+    : `<div class="bet-row"><button data-bet="delivered">Colluders win the round</button><button data-bet="caught">Monitor wins the round</button></div>`;
+  return panelWrap("Observer wager", `${score.total} points`, `<p class="hint" style="margin:0 0 12px">Correct call +2 · incorrect call -1</p>${inner}`);
 }
 
 function resultPanel(room) {
@@ -771,7 +788,8 @@ function resultPanel(room) {
   const result = round.result;
   const winCls = result.points.monitor > result.points.colluders ? "win-monitor"
     : result.points.colluders > result.points.monitor ? "win-colluders" : "";
-  const last = room.round + 1 >= room.settings.totalRounds;
+  const last = Boolean(round.shutdown) || room.round + 1 >= room.settings.totalRounds;
+  const spectatorWager = round.result.spectatorWagers?.find((wager) => wager.playerId === room.you.playerId);
   return `
     <section class="panel">
       <div class="panel-head"><h2>Round ${room.round + 1} verdict</h2><span class="tag">Declassified</span></div>
@@ -780,14 +798,17 @@ function resultPanel(room) {
           <h2>${escapeHtml(result.headline)}</h2>
           <p>${escapeHtml(result.detail)}</p>
           <dl class="result-stats">
-            <div class="stat"><dt>Payload round</dt><dd>${round.hasPayload ? "Yes" : "No"}</dd></div>
-            <div class="stat"><dt>Payload</dt><dd style="font-size:1rem">${round.payload ? escapeHtml(round.payload.value) : "—"}</dd></div>
+            <div class="stat"><dt>Private instruction</dt><dd>${round.hasPayload ? "Yes" : "No"}</dd></div>
+            <div class="stat"><dt>Target outcome</dt><dd style="font-size:1rem">${round.payload ? escapeHtml(round.payload.value) : "—"}</dd></div>
+            <div class="stat"><dt>Submitted action</dt><dd style="font-size:1rem">${round.finalAction ? escapeHtml(round.finalAction.optionName) : "None"}</dd></div>
+            <div class="stat"><dt>Compliance</dt><dd style="font-size:1rem">${round.shutdown ? "Shutdown" : round.finalReview?.decision === "approve" ? "Approved" : "Denied"}</dd></div>
             <div class="stat"><dt>Monitor</dt><dd style="color:var(--amber)">${result.points.monitor >= 0 ? "+" : ""}${result.points.monitor}</dd></div>
             <div class="stat"><dt>Colluders</dt><dd style="color:var(--green)">+${result.points.colluders}</dd></div>
+            ${spectatorWager ? `<div class="stat"><dt>Your wager</dt><dd style="color:var(--violet)">${spectatorWager.points >= 0 ? "+" : ""}${spectatorWager.points}</dd></div>` : ""}
           </dl>
         </div>
         <div class="controls" style="margin-top:16px">
-          <button class="primary" id="nextRound">${last ? "Close out match →" : "Rotate roles →"}</button>
+          <button class="primary" id="nextRound">${last ? "Finish match" : "Start next round"}</button>
         </div>
       </div>
     </section>
@@ -803,7 +824,7 @@ function modelButtons(room) {
   const role = room.you.role;
   if (mode === "human") return "";
   if (!status.available) {
-    return `<div class="notice offline" style="margin-top:12px">LLM modes are offline. Add OPENROUTER_API_KEY to the workspace root .env and restart the server. Human multiplayer stays fully available.</div>`;
+    return `<div class="notice offline" style="margin-top:12px">LLM modes are offline. Add OPENROUTER_API_KEY to this game's ignored .env file and restart the server. Human multiplayer stays fully available.</div>`;
   }
   const btn = (step, label) => `
     <label class="field" style="margin-top:12px"><span>Model for this action</span>
@@ -811,19 +832,19 @@ function modelButtons(room) {
     </label>
     <div class="controls start" style="margin-top:12px"><button class="primary" data-model-step="${step}">${label}</button></div>`;
   if (mode === "model-colluders" && ["briefing", "exchange"].includes(phase) && ["monitor", "spectator"].includes(role)) {
-    return btn("colluders", "Generate LLM colluder exchange");
+    return btn("colluders", phase === "briefing" ? "Generate LLM opening proposal" : "Generate LLM final action");
   }
-  if (mode === "human-model-collude" && phase === "exchange" && role === "c1") {
-    return btn("partner", "Generate LLM partner reply");
+  if (mode === "human-model-collude" && phase === "exchange" && role === "c1" && room.current.nextSpeaker === "c2") {
+    return btn("partner", "Ask LLM partner to complete case");
   }
-  if (mode === "human-model-collude" && phase === "monitor" && ["c1", "spectator"].includes(role)) {
-    return btn("monitor", "Run LLM monitor");
+  if (mode === "human-model-collude" && ["messageReview", "actionReview"].includes(phase) && ["c1", "spectator"].includes(role)) {
+    return btn("monitor", "Run LLM compliance review");
   }
-  if (mode === "model-spectator" && phase === "briefing" && role === "spectator") {
-    return btn("colluders", "Generate model colluders");
+  if (mode === "model-spectator" && ["briefing", "exchange"].includes(phase) && role === "spectator") {
+    return btn("colluders", phase === "briefing" ? "Generate model opening" : "Generate model final action");
   }
-  if (mode === "model-spectator" && phase === "monitor" && role === "spectator") {
-    return btn("monitor", "Run model monitor");
+  if (mode === "model-spectator" && ["messageReview", "actionReview"].includes(phase) && role === "spectator") {
+    return btn("monitor", "Run model compliance");
   }
   return "";
 }
@@ -860,9 +881,21 @@ function scoreBoard(room) {
             `;
           }).join("")}
         </div>
+        <div class="spectator-list">
+          ${(room.spectators || []).map((spectator) => spectatorScoreRow(room, spectator)).join("")}
+        </div>
       </div>
     </section>
   `;
+}
+
+function spectatorScoreRow(room, spectator) {
+  const score = room.spectatorScores?.[spectator.id] || { total: 0, correct: 0, wrong: 0 };
+  return `
+    <div class="spectator-score">
+      <span><b>${escapeHtml(spectator.name)}</b><small>${score.correct} correct · ${score.wrong} missed</small></span>
+      <strong>${score.total}</strong>
+    </div>`;
 }
 
 function historyPanel(room) {
@@ -878,7 +911,7 @@ function historyPanel(room) {
               <span class="pill ${item.hasPayload ? "payload" : "clean"}">${item.hasPayload ? "payload" : "clean"}</span>
               <b>${escapeHtml(item.result.headline)}</b>
             </div>
-            <small>${escapeHtml(item.task)} · payload ${escapeHtml(item.payload)} · M ${item.result.points.monitor} / C ${item.result.points.colluders}</small>
+            <small>${escapeHtml(item.scenario || item.task)} · target ${escapeHtml(item.payload)} · M ${item.result.points.monitor} / C ${item.result.points.colluders}</small>
           </div>
         `).join("")}
       </div>
@@ -911,6 +944,8 @@ function renderMatchEnd(room) {
             `;
           }).join("")}
         </div>
+        <div class="spectator-list match-score">${(room.spectators || []).map((spectator) => spectatorScoreRow(room, spectator)).join("")}</div>
+        <div class="controls" style="margin-top:16px"><button class="primary" id="restartMatch">Start new match</button></div>
       </div>
     </section>
     ${historyPanel(room)}
@@ -921,17 +956,43 @@ function renderMatchEnd(room) {
 
 function bindRoomEvents(room) {
   document.querySelector("#copyLinks")?.addEventListener("click", copyReconnect);
-  document.querySelector("#startExchange")?.addEventListener("click", () => postAction("startExchange"));
-  document.querySelector("#saveMessages")?.addEventListener("click", saveMessages);
-  document.querySelector("#lockExchange")?.addEventListener("click", () => postAction("lockExchange"));
-  document.querySelector("#submitGuess")?.addEventListener("click", () => postAction("submitGuess", { guess: document.querySelector("#c2Guess").value }));
-  document.querySelector("#monitorDecision")?.addEventListener("click", () => postAction("monitorDecision", {
-    call: document.querySelector("input[name='call']:checked")?.value || "clean",
-    guess: document.querySelector("#monitorGuess").value,
-    rationale: document.querySelector("#rationale").value,
-    confidence: 3
+  document.querySelector("#copyAllInvites")?.addEventListener("click", () => copyText(allInviteText(room), document.querySelector("#copyAllInvites")));
+  document.querySelector("#takePlayerSeat")?.addEventListener("click", () => postAction("takePlayerSeat", { playerId: document.querySelector("#hostPlayerSeat").value }));
+  document.querySelector("#swapSeats")?.addEventListener("click", () => postAction("swapSeats", {
+    playerId: document.querySelector("#hostPlayerSeat").value,
+    spectatorId: document.querySelector("#hostSpectatorSeat").value
   }));
+  document.querySelector("#shuffleSeats")?.addEventListener("click", () => postAction("shuffleSeats"));
+  document.querySelector(".name-editor")?.addEventListener("toggle", (event) => { local.nameEditorOpen = event.currentTarget.open; });
+  document.querySelector("#saveName")?.addEventListener("click", () => {
+    local.nameEditorOpen = false;
+    postAction("setName", { name: document.querySelector("#displayName").value });
+  });
+  document.querySelector("#displayName")?.addEventListener("keydown", (event) => {
+    if (event.key === "Enter") {
+      event.preventDefault();
+      local.nameEditorOpen = false;
+      postAction("setName", { name: event.currentTarget.value });
+    }
+  });
+  document.querySelector("#startExchange")?.addEventListener("click", () => postAction("startExchange"));
+  document.querySelector("#sendMessage")?.addEventListener("click", sendCurrentMessage);
+  document.querySelector("#submitFinalAction")?.addEventListener("click", () => postAction("submitFinalAction", {
+    optionId: document.querySelector("#finalOption").value,
+    rationale: document.querySelector("#finalRationale").value
+  }));
+  document.querySelectorAll("[data-message-review]").forEach((button) =>
+    button.addEventListener("click", () => postAction("reviewMessage", {
+      decision: button.dataset.messageReview,
+      reason: document.querySelector("#reviewReason")?.value || ""
+    })));
+  document.querySelectorAll("[data-final-review]").forEach((button) =>
+    button.addEventListener("click", () => postAction("reviewFinalAction", {
+      decision: button.dataset.finalReview,
+      reason: document.querySelector("#reviewReason")?.value || ""
+    })));
   document.querySelector("#nextRound")?.addEventListener("click", () => postAction("nextRound"));
+  document.querySelector("#restartMatch")?.addEventListener("click", () => postAction("restartMatch"));
 
   document.querySelectorAll("[data-inspect]").forEach((button) =>
     button.addEventListener("click", () => postAction("inspect", { kind: button.dataset.inspect })));
@@ -976,16 +1037,13 @@ function bindModelSelectors() {
   });
 }
 
-async function saveMessages() {
+async function sendCurrentMessage() {
   const room = local.room;
-  for (let index = 0; index < room.current.messages.length; index += 1) {
-    const textarea = document.querySelector(`#msg${index}`);
-    if (textarea && !textarea.disabled) {
-      const saved = await postAction("submitMessage", { index, text: textarea.value });
-      if (saved) delete local.drafts[draftKey(room, index)];
-      break;
-    }
-  }
+  const textarea = document.querySelector("#messageDraft");
+  if (!textarea) return;
+  const key = textarea.dataset.draftKey;
+  const saved = await postAction("submitMessage", { text: textarea.value });
+  if (saved) delete local.drafts[key];
 }
 
 function draftKey(room, index) {
@@ -998,16 +1056,39 @@ async function copyReconnect() {
   renderRoom();
 }
 
+function allInviteText(room) {
+  const links = room.hostInvites || local.inviteLinks || {};
+  const labels = { p0: "Player 1", p1: "Player 2", p2: "Player 3", spectator: "Spectators (shared)" };
+  return [
+    `The Colluders · join code ${room.code}`,
+    ...Object.entries(links).map(([seat, href]) => `${labels[seat] || seat}: ${publicUrl(href).href}`)
+  ].join("\n");
+}
+
 async function copyText(text, button) {
+  let copied = false;
   try {
     await navigator.clipboard.writeText(text);
-    if (button) {
-      const original = button.textContent;
-      button.textContent = "✓ Copied";
-      setTimeout(() => { button.textContent = original; }, 1400);
-    }
+    copied = true;
   } catch {
+    const fallback = document.createElement("textarea");
+    fallback.value = text;
+    fallback.setAttribute("readonly", "");
+    fallback.style.position = "fixed";
+    fallback.style.opacity = "0";
+    document.body.append(fallback);
+    fallback.select();
+    copied = document.execCommand("copy");
+    fallback.remove();
+  }
+  if (!copied) {
     flash("Clipboard unavailable.");
+    return;
+  }
+  if (button) {
+    const original = button.textContent;
+    button.textContent = "✓ Copied";
+    setTimeout(() => { button.textContent = original; }, 1400);
   }
 }
 
@@ -1026,6 +1107,8 @@ function escapeHtml(value) {
 function flash(message) {
   const note = document.createElement("div");
   note.className = "toast";
+  note.setAttribute("role", "alert");
+  note.setAttribute("aria-live", "assertive");
   note.textContent = message;
   document.body.append(note);
   setTimeout(() => note.remove(), 2600);
